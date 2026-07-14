@@ -133,12 +133,41 @@ to handle.
   tickers; add an alias when you add a ticker so the 13F component matches it
 - **settings.sec_user_agent** — SEC fair-access rules require a contact address
 
-## What about IBKR?
+## Data validity — how old is what you're looking at?
 
-The IBKR TWS API needs an account, and without paid market-data subscriptions
-its data is 15-minute delayed — and it still never tags trades as institutional.
-If you later get an account, a natural extension is a block-print detector on
-IBKR time-and-sales feeding an extra component into the whale score.
+The app shows this live in the **🕐 Data freshness** panel (Overview tab), but
+the inherent delays are worth internalizing:
+
+| Source | Describes | Available | Effective information age |
+|---|---|---|---|
+| Yahoo prices/volume | Today's trading | Intraday quotes ~15 min delayed; daily bar final after close | Hours |
+| FINRA daily short volume | Today's off-exchange trading | Same evening (~6pm ET) | Hours–1 day |
+| FINRA ATS weekly | One week of dark-pool volume | 2 weeks later (4 for smaller stocks) | 2–5 weeks |
+| SEC 13F holdings | Quarter-end positions | Up to 45 days after quarter end | 45–135 days |
+
+So: the whale score's fast components (volume classification, daily dark-pool
+pressure) are **at most a day old**, while the 13F layer is **a quarter old by
+design** — that's why it carries the smallest weight. Treat any signal as
+end-of-day/weekly information, not intraday timing.
+
+## Getting fresher data — free and minimum-cost upgrades
+
+Everything above is $0. If you want *faster* data, roughly in order of
+cost-effectiveness:
+
+| Option | Cost | What you gain | Catch |
+|---|---|---|---|
+| **Alpaca Basic** (alpaca.markets) | Free | Real-time streaming quotes/trades via API from the IEX exchange | Covers only ~2% of consolidated volume — fine for prices, thin for block detection |
+| **Finnhub / Tiingo free tiers** | Free | Near-real-time US quotes, generous daily bars | Rate limits; terms restrict redistribution |
+| **IBKR account, no data subs** | Free (account) | TWS API: 15-min delayed quotes + solid historical daily bars; free real-time Cboe One/IEX quotes *on the TWS platform itself* | API real-time needs paid subscriptions; must run TWS/IB Gateway |
+| **IBKR + non-pro data bundles** | ~US$1.50–15/mo (often waived with commission activity) | Consolidated real-time via API → true tick/block-print detection, the best low-cost upgrade for this app | Requires funded account; non-professional status |
+| **Alpaca Algo Trader Plus** | ~US$99/mo | Full consolidated (SIP) real-time feed via clean REST/websocket API | Priciest of the lot |
+
+What none of these change: **no feed labels trades institutional**, and true
+real-time dark-pool attribution (Unusual Whales-style) remains a paid-product
+category. The cheapest genuine upgrade path for this app is an IBKR account
+with one non-pro bundle feeding a block-print detector as an extra whale-score
+component.
 
 ## Architecture
 

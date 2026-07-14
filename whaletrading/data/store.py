@@ -141,3 +141,18 @@ def get_meta(conn: sqlite3.Connection, key: str, default=None):
 
 def mark_refreshed(conn: sqlite3.Connection, source: str) -> None:
     set_meta(conn, f"last_refresh:{source}", datetime.now(timezone.utc).isoformat())
+
+
+def source_freshness(conn: sqlite3.Connection) -> dict[str, str | None]:
+    """Latest data point per source (YYYY-MM-DD or None if the table is empty).
+
+    This is the *data date*, not the fetch time — e.g. a 13F row dated
+    2026-03-31 was filed up to 45 days later and fetched later still.
+    """
+    queries = {
+        "prices": "SELECT MAX(date) FROM prices",
+        "short_volume": "SELECT MAX(date) FROM short_volume",
+        "ats_weekly": "SELECT MAX(week_start) FROM ats_weekly",
+        "inst_13f": "SELECT MAX(report_period) FROM inst_13f",
+    }
+    return {name: conn.execute(sql).fetchone()[0] for name, sql in queries.items()}

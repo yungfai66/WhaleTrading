@@ -50,6 +50,32 @@ RIBBON_STEPS = ["#0d366b", "#1c5cab", "#2a78d6", "#5598e7", "#9ec5f4"]
 
 TIMEFRAMES = {"Daily": "D", "Weekly": "W", "Monthly": "M"}
 
+# Data-source metadata for the freshness/validity panel: display name,
+# inherent publication delay, and how old (calendar days) the newest row may
+# be before we flag the source as stale.
+SOURCE_INFO = {
+    "prices": {
+        "name": "Prices & volume (Yahoo Finance)",
+        "delay": "End of day — daily bars finalize after the US close; intraday quotes are ~15 min delayed",
+        "stale_after": 5,
+    },
+    "short_volume": {
+        "name": "Dark-pool short volume (FINRA daily)",
+        "delay": "Same evening (~6pm ET) — reflects that day's off-exchange trading",
+        "stale_after": 5,
+    },
+    "ats_weekly": {
+        "name": "Dark-pool ATS volume (FINRA weekly)",
+        "delay": "2-week publication delay (4 weeks for smaller stocks)",
+        "stale_after": 35,
+    },
+    "inst_13f": {
+        "name": "Institutional holdings (SEC 13F)",
+        "delay": "Quarterly; filed up to 45 days after quarter end — positions are 45–135 days old",
+        "stale_after": 140,
+    },
+}
+
 # Date-range presets for the ticker detail chart: label -> calendar days back
 # (None = show everything). Default preset differs by bar granularity so a
 # fresh page load looks like a reasonable default window.
@@ -326,8 +352,51 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
     return fig
 
 
+@st.cache_data(ttl=300)
+def load_freshness() -> dict:
+    conn = store.connect()
+    fresh = store.source_freshness(conn)
+    conn.close()
+    return fresh
+
+
+def freshness_panel(demo_mode: bool) -> None:
+    """Data validity: latest data point + inherent delay + stale flag per source."""
+    fresh = load_freshness()
+    with st.expander("🕐 Data freshness & validity — how current is what you're seeing?"):
+        if demo_mode:
+            st.caption("Demo mode: dates below are synthetic, not real market data.")
+        today = pd.Timestamp.today().normalize()
+        rows = []
+        for key, info in SOURCE_INFO.items():
+            latest = fresh.get(key)
+            if latest is None:
+                status = "❌ no data"
+            else:
+                age = (today - pd.Timestamp(latest)).days
+                status = "✅ current" if age <= info["stale_after"] else f"⚠️ stale ({age}d old)"
+            rows.append(
+                {
+                    "Source": info["name"],
+                    "Latest data point": latest or "—",
+                    "Inherent delay": info["delay"],
+                    "Status": status,
+                }
+            )
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.caption(
+            "⚠️ means the cache is older than the source's normal publication "
+            "cycle — hit **Refresh data now** in the sidebar. \"Inherent delay\" "
+            "is how old the information is even right after a refresh: prices "
+            "and dark-pool volume describe **yesterday/today**, weekly ATS "
+            "describes **2–4 weeks ago**, and 13F holdings describe **last "
+            "quarter**. Signals weight the fast sources most, and 13F least."
+        )
+
+
 def overview_page(cfg):
     st.subheader("Watchlist overview")
+    freshness_panel(cfg.demo_mode)
     df = load_overview(tuple(cfg.watchlist))
     ok = df[df["Status"] == "ok"]
     missing = df[df["Status"] != "ok"]
@@ -375,12 +444,21 @@ BANNER_BY_SEVERITY = {"success": st.success, "warning": st.warning}
 def verdict_banner(ticker: str, thr: dict) -> None:
     """Plain-language "what do I do now" verdict, always from the weekly view
     so it matches the overview table regardless of the selected bar size."""
-    act = signals.current_action(load_ticker_frame(ticker, "W"), thr)
+    weekly = load_ticker_frame(ticker, "W")
+    act = signals.current_action(weekly, thr)
     banner = BANNER_BY_SEVERITY.get(act["severity"], st.info)
     emoji = act["label"].split()[0]
     banner(f"**{emoji} {act['headline']}**\n\n{act['detail']}")
+    caption_bits = []
     if act["invalidation"]:
-        st.caption(f"↳ This changes if: {act['invalidation']}")
+        caption_bits.append(f"↳ This changes if: {act['invalidation']}")
+    if not weekly.empty:
+        caption_bits.append(
+            f"Verdict computed from data through **{weekly.index.max():%Y-%m-%d}** "
+            "(see 🕐 Data freshness on the Overview tab for per-source delays)."
+        )
+    if caption_bits:
+        st.caption("  \n".join(caption_bits))
 
 
 def how_to_read_expander() -> None:
