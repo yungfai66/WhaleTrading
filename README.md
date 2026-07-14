@@ -57,6 +57,22 @@ Zone badges per ticker: `<35` weak · `35–50` momentum · `50–75` rise · `>
 — thresholds are per-ticker configurable, since *"different stocks require
 different percentages of whale accumulation."*
 
+### How to act on the signals
+
+Every stock gets one plain-language verdict (overview table + banner on its
+detail page), decided from the weekly chart in priority order:
+
+| Action | When | What to do |
+|---|---|---|
+| 🟢 **Buy** | An entry setup fired in the last 2 weeks | Consider DCA-ing in — don't chase all at once |
+| 🟠 **Trim** | Whales appear to be selling to retail (top pattern) | Consider taking profit / tightening stops |
+| 🟡 **Watch** | Whales accumulating but no entry candle yet | Wait for confirmation |
+| 🔵 **Hold** | Uptrend intact, whales still positioned | Sit tight |
+| ⚪ **Wait** | No edge either way | Do nothing, re-check later |
+
+Each verdict comes with the reason in plain English and an explicit
+*"this changes if…"* invalidation condition.
+
 ## Quick start
 
 ```bash

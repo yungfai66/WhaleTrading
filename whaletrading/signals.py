@@ -72,6 +72,114 @@ def evaluate(frame: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+# Plain-English translations of the internal signal reason labels, for
+# non-trader-facing UI text.
+REASON_PLAIN = {
+    "dip reversal": "a strong bounce candle appeared during the downtrend while whale accumulation was rising",
+    "ribbon turn": "the trend just flipped bullish with whale accumulation behind it",
+    "MACD cross": "momentum turned up (MACD golden cross) while whales were buying",
+    "whale→retail shift": "whales appear to be handing shares to retail buyers near the top",
+    "yellow candle": "a weak candle formed while whale accumulation was falling",
+}
+
+# Verdicts ordered most-actionable-first (used to sort the overview table).
+ACTION_ORDER = ["BUY", "TRIM", "WATCH", "HOLD", "WAIT"]
+ACTION_LABELS = {
+    "BUY": "🟢 Buy",
+    "TRIM": "🟠 Trim",
+    "WATCH": "🟡 Watch",
+    "HOLD": "🔵 Hold",
+    "WAIT": "⚪ Wait",
+}
+
+
+def current_action(frame: pd.DataFrame, thresholds: dict) -> dict:
+    """Plain-language verdict for "what do I do right now" from an evaluated
+    weekly frame (output of `evaluate`).
+
+    Returns {action, label, severity, headline, detail, invalidation}.
+    Priority: fresh sell warning > fresh buy setup > setup forming > hold > wait.
+    """
+    if frame is None or frame.empty:
+        return {
+            "action": "WAIT",
+            "label": ACTION_LABELS["WAIT"],
+            "severity": "neutral",
+            "headline": "Wait — no data",
+            "detail": "No data available for this ticker yet.",
+            "invalidation": "",
+        }
+
+    latest = frame.iloc[-1]
+    fresh = frame.tail(2)  # this week + last week
+    whale = float(latest["whale_score"])
+    delta = float(latest.get("whale_delta") or 0)
+    zone = zone_label(whale, thresholds)
+    trend_word = "rising" if delta > DELTA_EPS else ("falling" if delta < -DELTA_EPS else "flat")
+    score_text = f"Whale score is {whale:.0f} ({zone} zone) and {trend_word}."
+
+    def _plain(reason_col: str) -> str:
+        parts: list[str] = []
+        for reasons in fresh[reason_col].dropna():
+            for r in str(reasons).split(", "):
+                plain = REASON_PLAIN.get(r)
+                if plain and plain not in parts:
+                    parts.append(plain)
+        return "; ".join(parts).capitalize() if parts else ""
+
+    fresh_sell = fresh["sell_signal"].any()
+    fresh_buy = fresh["buy_signal"].any()
+
+    if fresh_sell:
+        when = "this week" if bool(frame["sell_signal"].iloc[-1]) else "last week"
+        return {
+            "action": "TRIM",
+            "label": ACTION_LABELS["TRIM"],
+            "severity": "warning",
+            "headline": "Trim / take profit — whales look like they're selling",
+            "detail": f"A sell warning fired {when}: {_plain('sell_reason') or 'distribution pattern'}. {score_text}",
+            "invalidation": "Reconsider if whale accumulation turns back up without the pattern repeating.",
+        }
+    if fresh_buy:
+        when = "this week" if bool(frame["buy_signal"].iloc[-1]) else "last week"
+        return {
+            "action": "BUY",
+            "label": ACTION_LABELS["BUY"],
+            "severity": "success",
+            "headline": "Buy setup active — consider dollar-cost averaging in",
+            "detail": f"A buy signal fired {when}: {_plain('buy_reason') or 'reversal pattern with whale support'}. {score_text}",
+            "invalidation": "Setup is invalidated if whale accumulation starts falling or price breaks below the signal candle's low.",
+        }
+    if delta > DELTA_EPS and zone != "weak" and bool(
+        latest.get("ribbon_tightening") or latest.get("ribbon_bearish")
+    ):
+        return {
+            "action": "WATCH",
+            "label": ACTION_LABELS["WATCH"],
+            "severity": "info",
+            "headline": "Setup forming — whales accumulating, no entry candle yet",
+            "detail": f"{score_text} The trend ribbon is compressing, which often precedes a move.",
+            "invalidation": "Wait for a bullish candle or MACD cross to confirm before buying.",
+        }
+    if bool(latest.get("ribbon_bullish")) and delta > -DELTA_EPS:
+        return {
+            "action": "HOLD",
+            "label": ACTION_LABELS["HOLD"],
+            "severity": "info",
+            "headline": "Hold — uptrend intact, whales still in",
+            "detail": f"The trend ribbon is bullish and whale accumulation is holding. {score_text}",
+            "invalidation": "Watch for whale accumulation falling while retail rises — that's the trim warning.",
+        }
+    return {
+        "action": "WAIT",
+        "label": ACTION_LABELS["WAIT"],
+        "severity": "neutral",
+        "headline": "Wait — no edge right now",
+        "detail": f"No active setup. {score_text}",
+        "invalidation": "Re-check when whale accumulation starts rising or a buy signal fires.",
+    }
+
+
 def zone_label(score: float, thresholds: dict) -> str:
     """Threshold badge for a whale score, honoring per-ticker overrides."""
     if score >= thresholds.get("soar", 75):

@@ -111,10 +111,20 @@ def load_overview(watchlist: tuple[str, ...]) -> pd.DataFrame:
         weekly = load_ticker_frame(ticker, "W")
         last = metrics.iloc[-1]
         thr = cfg.thresholds_for(ticker)
-        recent = weekly.tail(4) if not weekly.empty else pd.DataFrame()
+        act = signals.current_action(weekly, thr)
+
+        fresh_msg = ""
+        if not weekly.empty:
+            latest_bar = weekly.iloc[-1]
+            if bool(latest_bar["sell_signal"]):
+                fresh_msg = f"🟠 **{ticker}**: sell warning this week — {act['detail']}"
+            elif bool(latest_bar["buy_signal"]):
+                fresh_msg = f"🟢 **{ticker}**: buy setup this week — {act['detail']}"
+
         rows.append(
             {
                 "Ticker": ticker,
+                "Action": act["label"],
                 "Close": round(float(daily["close"].iloc[-1]), 2),
                 "Whale %": round(float(last["whale_score"]), 1),
                 "Δ 20d": round(
@@ -128,9 +138,10 @@ def load_overview(watchlist: tuple[str, ...]) -> pd.DataFrame:
                 else None,
                 "Retail %": round(float(last["retail_score"]), 1),
                 "Zone": signals.zone_label(float(last["whale_score"]), thr),
-                "Buy (4w)": bool(recent["buy_signal"].any()) if not recent.empty else False,
-                "Sell (4w)": bool(recent["sell_signal"].any()) if not recent.empty else False,
                 "Status": "ok",
+                "_sort": signals.ACTION_ORDER.index(act["action"]),
+                "_fresh_msg": fresh_msg,
+                "_severity": act["severity"],
             }
         )
     conn.close()
@@ -318,11 +329,22 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
 def overview_page(cfg):
     st.subheader("Watchlist overview")
     df = load_overview(tuple(cfg.watchlist))
-    ok = df[df["Status"] == "ok"].drop(columns=["Status"])
+    ok = df[df["Status"] == "ok"]
     missing = df[df["Status"] != "ok"]
     if not ok.empty:
+        fresh = [m for m in ok["_fresh_msg"] if m]
+        if fresh:
+            st.markdown("##### 🔔 Fresh signals this week")
+            for msg in fresh:
+                (st.warning if msg.startswith("🟠") else st.success)(msg)
+        else:
+            st.caption("🔔 No fresh buy/sell signals this week.")
+
+        display = ok.sort_values(
+            ["_sort", "Whale %"], ascending=[True, False]
+        ).drop(columns=["Status", "_sort", "_fresh_msg", "_severity"])
         st.dataframe(
-            ok.sort_values("Whale %", ascending=False),
+            display,
             use_container_width=True,
             hide_index=True,
             column_config={
@@ -332,8 +354,12 @@ def overview_page(cfg):
             },
         )
         st.caption(
-            "Zone thresholds (per-ticker configurable): momentum >35, rise >50, "
-            "soar >75. Buy/Sell flags = any weekly signal in the last 4 weeks."
+            "**Action guide:** 🟢 Buy = entry setup fired, consider DCA · "
+            "🟠 Trim = whales look like they're selling, consider taking profit · "
+            "🟡 Watch = whales accumulating, wait for the entry candle · "
+            "🔵 Hold = uptrend intact · ⚪ Wait = no edge. "
+            "Zones: momentum >35, rise >50, soar >75 (per-ticker configurable). "
+            "Open a stock's page (Ticker detail tab) for the full explanation."
         )
     if not missing.empty:
         st.warning(
@@ -343,11 +369,67 @@ def overview_page(cfg):
         )
 
 
+BANNER_BY_SEVERITY = {"success": st.success, "warning": st.warning}
+
+
+def verdict_banner(ticker: str, thr: dict) -> None:
+    """Plain-language "what do I do now" verdict, always from the weekly view
+    so it matches the overview table regardless of the selected bar size."""
+    act = signals.current_action(load_ticker_frame(ticker, "W"), thr)
+    banner = BANNER_BY_SEVERITY.get(act["severity"], st.info)
+    emoji = act["label"].split()[0]
+    banner(f"**{emoji} {act['headline']}**\n\n{act['detail']}")
+    if act["invalidation"]:
+        st.caption(f"↳ This changes if: {act['invalidation']}")
+
+
+def how_to_read_expander() -> None:
+    with st.expander("📖 How to read this — plain-language guide"):
+        st.markdown(
+            """
+**The one-line answer:** buy when whales are accumulating *and* the chart
+confirms it with an entry candle; take profit when whales quietly hand their
+shares to retail buyers near a top.
+
+**The five actions** (shown on the overview and in the banner above):
+
+| Action | Meaning | What to do |
+|---|---|---|
+| 🟢 Buy | An entry setup fired in the last 2 weeks | Consider dollar-cost averaging in — don't chase all at once |
+| 🟠 Trim | Whales look like they're selling to retail | Consider taking some profit / tightening stops |
+| 🟡 Watch | Whales accumulating, but no entry candle yet | Wait for confirmation before buying |
+| 🔵 Hold | Uptrend intact, whales still positioned | Sit tight, don't over-trade |
+| ⚪ Wait | No edge either way | Do nothing; re-check later |
+
+**What makes a 🟢 Buy signal** (any one of these, always requiring whale
+accumulation to be rising or retail falling):
+- a strong bounce candle during a downtrend while the trend ribbon is compressing
+- the trend ribbon flipping bullish
+- a MACD golden cross
+
+**What makes a 🟠 Trim warning:**
+- whale accumulation falling while retail buying rises during an uptrend
+  (the classic hand-off at a top)
+- a weak candle with whales pulling back
+
+**The whale score zones** (thresholds configurable per stock): below 35 =
+weak, above 35 = momentum, above 50 = rise, above 75 = soar.
+
+⚠️ *These are proxies built from free public data (FINRA off-exchange volume,
+SEC 13F filings, volume patterns) — no feed truly labels trades as
+institutional. Weekly signals; not financial advice.*
+"""
+        )
+
+
 def detail_page(cfg):
     col1, col2 = st.columns([2, 1])
     ticker = col1.selectbox("Ticker", cfg.watchlist)
     tf_label = col2.radio("Bar size", list(TIMEFRAMES), horizontal=True, index=1)
     timeframe = TIMEFRAMES[tf_label]
+
+    verdict_banner(ticker, cfg.thresholds_for(ticker))
+    how_to_read_expander()
 
     frame = load_ticker_frame(ticker, timeframe)
     if frame.empty:
