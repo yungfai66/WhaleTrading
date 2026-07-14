@@ -1,0 +1,104 @@
+# ---------------------------------------------------------------------------
+# WhaleTrading watchlist & tuning
+#
+# Add/remove tickers freely. Everything below has sensible defaults; only
+# `watchlist` is required.
+# ---------------------------------------------------------------------------
+
+watchlist:
+  - NVDA
+  - AAPL
+  - MSFT
+  - TSLA
+  - AMZN
+  - META
+  - GOOGL
+  - QQQ
+  - SPY
+  - SPCX
+  - COIN
+  - HOOD
+  - MSTR
+  - BMNR
+  - ECHO
+  - FUTU
+  - PLTR
+  - IREN
+  - RKLB
+  - MU
+  - INTC
+
+# Whale-accumulation thresholds (score 0-100).
+# From the strategy notes: >35 momentum, >50 rise, >75 soar.
+thresholds:
+  default:
+    momentum: 35
+    rise: 50
+    soar: 75
+  # Per-ticker overrides — "different stocks require different percentages".
+  overrides: {}
+  #  MSTR: {momentum: 40, rise: 55, soar: 80}
+
+settings:
+  # Years of daily OHLCV history to fetch (weekly/monthly are resampled).
+  price_lookback_years: 5
+
+  # Calendar days of FINRA Reg SHO daily short-volume files to backfill.
+  finra_short_volume_days: 365
+
+  # Rolling baseline window (trading days) for dark-pool pressure z-scores.
+  baseline_window: 60
+
+  # Volume z-score above which a day counts as a "big money" (whale) day.
+  volume_zscore_threshold: 1.25
+
+  # Rolling window (trading days) for accumulating whale/retail flow bars.
+  flow_window: 20
+
+  # Component weights for the composite whale score (renormalized when a
+  # source is unavailable).
+  whale_weights:
+    big_money_volume: 0.45   # volume-classified accumulation from OHLCV
+    dark_pool: 0.35          # FINRA daily off-exchange short-volume pressure
+    inst_13f: 0.20           # quarterly 13F holdings delta (slow layer)
+
+  # SEC EDGAR requires a descriptive User-Agent with a contact address.
+  sec_user_agent: "WhaleTrading research yungfai66@gmail.com"
+
+# Large 13F filers tracked for the institutional-delta component.
+# CIKs are editable — add or replace managers as you like.
+managers_13f:
+  - {name: "Vanguard Group", cik: 102909}
+  - {name: "BlackRock", cik: 1364742}
+  - {name: "State Street", cik: 93751}
+  - {name: "FMR (Fidelity)", cik: 315066}
+  - {name: "Geode Capital", cik: 1214717}
+  - {name: "T. Rowe Price", cik: 80255}
+  - {name: "Berkshire Hathaway", cik: 1067983}
+  - {name: "JPMorgan Chase", cik: 19617}
+  - {name: "Goldman Sachs", cik: 886982}
+  - {name: "Morgan Stanley", cik: 895421}
+
+# 13F info tables identify holdings by issuer name + CUSIP, not ticker.
+# Map issuer-name substrings (case-insensitive) to your tickers here.
+# Tickers without an alias fall back to a normalized-name match against
+# the company name reported by Yahoo Finance.
+issuer_aliases:
+  NVDA: ["NVIDIA CORP"]
+  AAPL: ["APPLE INC"]
+  MSFT: ["MICROSOFT CORP"]
+  TSLA: ["TESLA INC"]
+  AMZN: ["AMAZON COM INC", "AMAZON.COM"]
+  META: ["META PLATFORMS"]
+  GOOGL: ["ALPHABET INC"]
+  QQQ: ["INVESCO QQQ"]
+  SPY: ["SPDR S&P 500"]
+  COIN: ["COINBASE GLOBAL"]
+  HOOD: ["ROBINHOOD MARKETS"]
+  MSTR: ["MICROSTRATEGY", "STRATEGY INC"]
+  FUTU: ["FUTU HOLDINGS"]
+  PLTR: ["PALANTIR TECHNOLOGIES"]
+  IREN: ["IREN LTD", "IRIS ENERGY"]
+  RKLB: ["ROCKET LAB"]
+  MU: ["MICRON TECHNOLOGY"]
+  INTC: ["INTEL CORP"]
