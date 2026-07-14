@@ -49,7 +49,14 @@ C = {
 RIBBON_STEPS = ["#0d366b", "#1c5cab", "#2a78d6", "#5598e7", "#9ec5f4"]
 
 TIMEFRAMES = {"Daily": "D", "Weekly": "W", "Monthly": "M"}
-MAX_BARS = {"D": 504, "W": 260, "M": 120}
+
+# Date-range presets for the ticker detail chart: label -> calendar days back
+# (None = show everything). Default preset differs by bar granularity so a
+# fresh page load looks like a reasonable default window.
+RANGE_PRESETS = {
+    "1M": 30, "3M": 91, "6M": 182, "1Y": 365, "2Y": 730, "5Y": 1826, "All": None,
+}
+DEFAULT_RANGE = {"D": "1Y", "W": "2Y", "M": "All"}
 
 st.set_page_config(page_title="WhaleTrading", page_icon="🐋", layout="wide")
 
@@ -339,14 +346,38 @@ def overview_page(cfg):
 def detail_page(cfg):
     col1, col2 = st.columns([2, 1])
     ticker = col1.selectbox("Ticker", cfg.watchlist)
-    tf_label = col2.radio("Timeframe", list(TIMEFRAMES), horizontal=True, index=1)
+    tf_label = col2.radio("Bar size", list(TIMEFRAMES), horizontal=True, index=1)
     timeframe = TIMEFRAMES[tf_label]
 
     frame = load_ticker_frame(ticker, timeframe)
     if frame.empty:
-        st.warning("No data cached for this ticker yet — run a refresh from the sidebar.")
+        st.warning(
+            "No data cached for this ticker yet. Click **Refresh data now** in the "
+            "sidebar — if it still comes up empty, live FINRA/EDGAR/Yahoo fetches may "
+            "be failing on this host; set the `WHALETRADING_DEMO=1` secret for a "
+            "reliable demo instead."
+        )
         return
-    frame = frame.tail(MAX_BARS[timeframe])
+
+    range_labels = list(RANGE_PRESETS) + ["Custom"]
+    default_idx = range_labels.index(DEFAULT_RANGE[timeframe])
+    range_label = st.radio(
+        "Time range", range_labels, horizontal=True, index=default_idx, key=f"range_{ticker}"
+    )
+    if range_label == "Custom":
+        c1, c2 = st.columns(2)
+        start = c1.date_input("From", value=frame.index.min().date(), key=f"from_{ticker}")
+        end = c2.date_input("To", value=frame.index.max().date(), key=f"to_{ticker}")
+        frame = frame.loc[str(start) : str(end)]
+    else:
+        days = RANGE_PRESETS[range_label]
+        if days is not None:
+            cutoff = frame.index.max() - pd.Timedelta(days=days)
+            frame = frame[frame.index >= cutoff]
+
+    if frame.empty:
+        st.warning("No bars in the selected range — widen the time range.")
+        return
     thr = cfg.thresholds_for(ticker)
 
     latest = frame.iloc[-1]
@@ -418,16 +449,19 @@ def main():
                 st.warning("Unavailable sources: " + ", ".join(failed))
             st.cache_data.clear()
             st.rerun()
-        page = st.radio("Page", ["Overview", "Ticker detail"])
         st.divider()
         st.caption(
             "Edit `config/watchlist.yaml` to change tickers, thresholds, "
             "weights, and tracked 13F managers."
         )
 
-    if page == "Overview":
+    # Top-level tabs, not sidebar nav: the sidebar auto-collapses on narrow
+    # embeds (e.g. Streamlit Community Cloud), which was hiding "Ticker
+    # detail" entirely. Tabs stay visible regardless of sidebar state.
+    tab_overview, tab_detail = st.tabs(["📊 Overview", "📈 Ticker detail"])
+    with tab_overview:
         overview_page(cfg)
-    else:
+    with tab_detail:
         detail_page(cfg)
 
 
