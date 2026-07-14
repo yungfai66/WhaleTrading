@@ -7,6 +7,7 @@ Demo: WHALETRADING_DEMO=1 streamlit run app.py   (synthetic data, no network)
 from __future__ import annotations
 
 import json
+import os
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -18,6 +19,14 @@ from whaletrading.config import load_config
 from whaletrading.data import prices as prices_mod
 from whaletrading.data import store
 from whaletrading.pipeline import refresh_all
+
+# Streamlit Cloud secrets don't auto-populate os.environ — bridge the one
+# setting we read that way. No-op locally (no secrets.toml) or off Cloud.
+try:
+    if "WHALETRADING_DEMO" in st.secrets:
+        os.environ.setdefault("WHALETRADING_DEMO", str(st.secrets["WHALETRADING_DEMO"]))
+except Exception:
+    pass
 
 # Validated palette (dataviz reference, light mode).
 C = {
@@ -48,6 +57,19 @@ st.set_page_config(page_title="WhaleTrading", page_icon="🐋", layout="wide")
 @st.cache_resource
 def get_config():
     return load_config()
+
+
+@st.cache_resource
+def bootstrap_data(_cfg) -> bool:
+    """Populate the SQLite cache on a fresh container so visitors never see an
+    empty dashboard. Runs at most once per container lifecycle (cache_resource)."""
+    conn = store.connect()
+    has_data = conn.execute("SELECT 1 FROM metrics LIMIT 1").fetchone() is not None
+    conn.close()
+    if has_data:
+        return False
+    refresh_all(_cfg)
+    return True
 
 
 @st.cache_data(ttl=300)
@@ -370,6 +392,9 @@ def detail_page(cfg):
 
 def main():
     cfg = get_config()
+    with st.spinner("First run — fetching data (FINRA / EDGAR / prices)…"):
+        bootstrap_data(cfg)
+
     st.title("🐋 WhaleTrading")
     st.caption(
         "Institutional (whale) accumulation tracker built entirely on free data: "

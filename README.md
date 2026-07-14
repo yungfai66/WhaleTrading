@@ -83,6 +83,30 @@ WHALETRADING_DEMO=1 streamlit run app.py
 Generates deterministic synthetic data so you can explore the UI offline.
 Delete `data/whaletrading.db` before switching between demo and live data.
 
+The app also **auto-bootstraps on first load**: if the SQLite cache is empty
+(e.g. a fresh container), it runs the pipeline once automatically before
+rendering, so you never land on a blank dashboard.
+
+## Free online preview — Streamlit Community Cloud
+
+Streamlit apps don't run on Netlify (it only hosts static sites / serverless
+functions, not a persistent Python/WebSocket process). The free host built
+for this is [Streamlit Community Cloud](https://streamlit.io/cloud):
+
+1. Push this repo to GitHub (public repo — free tier requirement).
+2. Go to [share.streamlit.io](https://share.streamlit.io) → **New app** →
+   pick the repo/branch → main file path `app.py`.
+3. Under **Advanced settings → Secrets**, paste the contents of
+   `.streamlit/secrets.toml.example` (i.e. `WHALETRADING_DEMO = "1"`) so the
+   public preview always works, even if FINRA/EDGAR are briefly unreachable
+   from Streamlit Cloud's IPs. Omit it if you'd rather serve live data (first
+   load will be slower while it backfills FINRA history).
+4. Deploy — you get a `https://<your-app>.streamlit.app` URL to share.
+
+Community Cloud containers sleep after inactivity and reset their filesystem
+on redeploy/wake, which is exactly what the auto-bootstrap step above exists
+to handle.
+
 ## Customization — `config/watchlist.yaml`
 
 - **watchlist** — add/remove any NYSE/NASDAQ tickers
