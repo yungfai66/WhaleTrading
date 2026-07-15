@@ -89,6 +89,18 @@ DEFAULT_RANGE = {"D": "1Y", "W": "2Y", "M": "All"}
 NAV_OPTIONS = ["📊 Overview", "📈 Ticker detail"]
 
 
+def get_working_watchlist(cfg) -> list[str]:
+    """The ticker list actually shown, after this session's pins/adds/
+    removes/reordering. Starts as a copy of cfg.watchlist. Session-scoped
+    only (see manage_watchlist_panel) — resets on page reload, since the
+    app's filesystem is ephemeral on Streamlit Cloud and silently rewriting
+    config/watchlist.yaml would look like it worked locally but lose the
+    change on every redeploy there."""
+    st.session_state.setdefault("watchlist_order", list(cfg.watchlist))
+    st.session_state.setdefault("pinned_tickers", set())
+    return st.session_state["watchlist_order"]
+
+
 def _table_height(n_rows: int) -> int:
     """Size the dataframe container so every row is visible with no internal
     scrollbar — the page scrolls instead, never a scrollbar nested inside a
@@ -511,11 +523,94 @@ def freshness_panel(demo_mode: bool) -> None:
         )
 
 
+def manage_watchlist_panel(cfg) -> None:
+    """Pin/add/remove/reorder tickers for the current browser session."""
+    working = get_working_watchlist(cfg)
+    pinned = st.session_state["pinned_tickers"]
+
+    # key= makes Streamlit persist open/closed state across reruns — without
+    # it, every pin/add/move/delete click (each triggers a rerun) would snap
+    # the expander shut again right after the user opened it.
+    with st.expander(
+        "⚙️ Manage watchlist — pin, add, remove, reorder", key="manage_watchlist_expander"
+    ):
+        # A widget's session_state value can't be reassigned after that
+        # widget has already been instantiated in the same run — so clearing
+        # the text input after "Add" needs the same stash-then-rerun pattern
+        # used for cross-page navigation, applied *before* the widget below
+        # is created.
+        if st.session_state.pop("_clear_add_ticker_input", False):
+            st.session_state["add_ticker_input"] = ""
+
+        st.caption(
+            "📌 Pin a stock to keep it at the top of the table. Changes here "
+            "apply only to **your current browser session** and reset if you "
+            "reload the page — for permanent changes, edit "
+            "`config/watchlist.yaml` in the repo instead. After **adding** a "
+            "ticker, click **Refresh data now** in the sidebar to fetch its "
+            "data before it shows up with real numbers."
+        )
+        c1, c2 = st.columns([4, 1])
+        new_ticker = c1.text_input(
+            "Add a ticker symbol",
+            key="add_ticker_input",
+            label_visibility="collapsed",
+            placeholder="Add a ticker, e.g. GOOG",
+        )
+        if c2.button("➕ Add", use_container_width=True) and new_ticker.strip():
+            sym = new_ticker.strip().upper()
+            if sym in working:
+                st.warning(f"{sym} is already in your watchlist.")
+            else:
+                working.append(sym)
+                st.session_state["_clear_add_ticker_input"] = True
+                st.rerun()
+
+        if not working:
+            st.warning("Your watchlist is empty — add a ticker above.")
+            return
+
+        st.divider()
+        hdr = st.columns([1, 3, 1, 1, 1])
+        hdr[0].caption("Pin")
+        hdr[1].caption("Ticker")
+        hdr[2].caption("Move")
+        for i, ticker in enumerate(working):
+            row = st.columns([1, 3, 1, 1, 1])
+            is_pinned = row[0].checkbox(
+                "Pin", value=ticker in pinned, key=f"pin_{ticker}", label_visibility="collapsed"
+            )
+            if is_pinned:
+                pinned.add(ticker)
+            else:
+                pinned.discard(ticker)
+            row[1].write(f"**{ticker}**")
+            if row[2].button("↑", key=f"up_{ticker}", disabled=(i == 0), help="Move up"):
+                working[i - 1], working[i] = working[i], working[i - 1]
+                st.rerun()
+            if row[3].button("↓", key=f"down_{ticker}", disabled=(i == len(working) - 1), help="Move down"):
+                working[i + 1], working[i] = working[i], working[i + 1]
+                st.rerun()
+            if row[4].button("🗑️", key=f"del_{ticker}", help=f"Remove {ticker} from your watchlist"):
+                working.remove(ticker)
+                pinned.discard(ticker)
+                if st.session_state.get("detail_ticker") == ticker:
+                    st.session_state["detail_ticker"] = working[0] if working else None
+                st.rerun()
+
+
 def overview_page(cfg):
     st.subheader("Watchlist overview")
     freshness_panel(cfg.demo_mode)
-    df = load_overview(tuple(cfg.watchlist))
-    ok = df[df["Status"] == "ok"]
+    manage_watchlist_panel(cfg)
+
+    working = get_working_watchlist(cfg)
+    pinned = st.session_state["pinned_tickers"]
+    if not working:
+        return
+    df = load_overview(tuple(working))
+    ok = df[df["Status"] == "ok"].copy()
+    ok["_pinned"] = ok["Ticker"].isin(pinned)
     missing = df[df["Status"] != "ok"]
     if not ok.empty:
         fresh = [m for m in ok["_fresh_msg"] if m]
@@ -527,9 +622,10 @@ def overview_page(cfg):
             st.caption("🔔 No stock has an active buy or sell signal this week.")
 
         display = ok.sort_values(
-            ["_sort", "Whale %"], ascending=[True, False]
+            ["_pinned", "_sort", "Whale %"], ascending=[False, True, False]
         ).drop(columns=["Status", "_sort", "_fresh_msg", "_severity"]).reset_index(drop=True)
-        st.caption("💡 Click a row to open that stock's chart.")
+        display.insert(0, "📌", display.pop("_pinned").map({True: "📌", False: ""}))
+        st.caption("💡 Click a row to open that stock's chart. Pinned stocks (📌) stay on top.")
         event = st.dataframe(
             display,
             use_container_width=True,
@@ -538,6 +634,9 @@ def overview_page(cfg):
             on_select="rerun",
             selection_mode="single-row",
             column_config={
+                "📌": st.column_config.TextColumn(
+                    "📌", help="Pinned in 'Manage watchlist' above — stays sorted to the top.", width="small"
+                ),
                 "Ticker": st.column_config.TextColumn(
                     "Ticker", help="Click anywhere on a row to open that stock's full chart on the Ticker detail page."
                 ),
@@ -724,8 +823,15 @@ weekly. This is not financial advice.*
 
 
 def detail_page(cfg):
+    working = get_working_watchlist(cfg)
+    if not working:
+        st.warning("Your watchlist is empty — add a ticker in the Overview tab's Manage watchlist panel.")
+        return
+    if st.session_state.get("detail_ticker") not in working:
+        st.session_state["detail_ticker"] = working[0]
+
     col1, col2 = st.columns([2, 1])
-    ticker = col1.selectbox("Ticker", cfg.watchlist, key="detail_ticker")
+    ticker = col1.selectbox("Ticker", working, key="detail_ticker")
     tf_label = col2.radio(
         "Bar size",
         list(TIMEFRAMES),
@@ -899,8 +1005,9 @@ def go_to_ticker(ticker: str) -> None:
 
 def main():
     cfg = get_config()
+    working = get_working_watchlist(cfg)
     st.session_state.setdefault("nav_view", NAV_OPTIONS[0])
-    st.session_state.setdefault("detail_ticker", cfg.watchlist[0])
+    st.session_state.setdefault("detail_ticker", working[0] if working else None)
     pending = st.session_state.pop("pending_nav", None)
     if pending:
         st.session_state["nav_view"], st.session_state["detail_ticker"] = pending
@@ -943,7 +1050,7 @@ def main():
             ),
         ):
             with st.spinner("Fetching FINRA / EDGAR / prices…"):
-                summary = refresh_all(cfg)
+                summary = refresh_all(cfg, tickers=get_working_watchlist(cfg))
             failed = summary.get("sources_failed", [])
             if failed:
                 st.warning("Unavailable sources: " + ", ".join(failed))
@@ -951,8 +1058,9 @@ def main():
             st.rerun()
         st.divider()
         st.caption(
-            "Edit `config/watchlist.yaml` to change tickers, thresholds, "
-            "weights, and tracked 13F managers."
+            "Pin, add, remove, or reorder tickers for this session in "
+            "**Manage watchlist** (Overview tab). For permanent changes, "
+            "edit `config/watchlist.yaml` in the repo instead."
         )
 
     # Top-level radio, not sidebar nav or st.tabs: the sidebar auto-collapses

@@ -23,26 +23,35 @@ from .indicators.whale_score import composite_whale_score
 log = logging.getLogger(__name__)
 
 
-def refresh_all(cfg: Config | None = None, db_path=None) -> dict:
-    """Refresh every ticker; returns a per-source summary for the UI/CLI."""
+def refresh_all(
+    cfg: Config | None = None, db_path=None, tickers: list[str] | None = None
+) -> dict:
+    """Refresh the given tickers (default: cfg.watchlist); returns a
+    per-source summary for the UI/CLI.
+
+    `tickers` lets a caller refresh a different (e.g. session-customized)
+    watchlist than the one in config/watchlist.yaml — used by the app's
+    "add a ticker" feature so a newly added symbol actually gets fetched.
+    """
     cfg = cfg or load_config()
+    tickers = list(tickers) if tickers else list(cfg.watchlist)
     conn = store.connect(db_path)
     summary: dict = {"tickers": {}, "demo_mode": cfg.demo_mode}
 
-    price_frames = _refresh_prices(conn, cfg, summary)
-    _refresh_short_volume(conn, cfg, summary, price_frames)
-    _refresh_ats(conn, cfg, summary, price_frames)
-    _refresh_13f(conn, cfg, summary)
-    _recompute_metrics(conn, cfg, summary, price_frames)
+    price_frames = _refresh_prices(conn, cfg, summary, tickers)
+    _refresh_short_volume(conn, cfg, summary, price_frames, tickers)
+    _refresh_ats(conn, cfg, summary, price_frames, tickers)
+    _refresh_13f(conn, cfg, summary, tickers)
+    _recompute_metrics(conn, cfg, summary, price_frames, tickers)
 
     store.mark_refreshed(conn, "pipeline")
     conn.close()
     return summary
 
 
-def _refresh_prices(conn, cfg: Config, summary: dict) -> dict[str, pd.DataFrame]:
+def _refresh_prices(conn, cfg: Config, summary: dict, tickers: list[str]) -> dict[str, pd.DataFrame]:
     frames: dict[str, pd.DataFrame] = {}
-    for ticker in cfg.watchlist:
+    for ticker in tickers:
         df = (
             demo.demo_prices(ticker, cfg.price_lookback_years)
             if cfg.demo_mode
@@ -68,7 +77,7 @@ def _refresh_prices(conn, cfg: Config, summary: dict) -> dict[str, pd.DataFrame]
     return frames
 
 
-def _refresh_short_volume(conn, cfg: Config, summary: dict, price_frames) -> None:
+def _refresh_short_volume(conn, cfg: Config, summary: dict, price_frames, tickers: list[str]) -> None:
     if cfg.demo_mode:
         for ticker, pf in price_frames.items():
             df = demo.demo_short_volume(ticker, pf)
@@ -82,9 +91,7 @@ def _refresh_short_volume(conn, cfg: Config, summary: dict, price_frames) -> Non
         for row in conn.execute("SELECT DISTINCT date FROM short_volume").fetchall()
     }
     start = date.today() - timedelta(days=cfg.finra_short_volume_days)
-    df = finra_short_volume.fetch_range(
-        cfg.watchlist, start=start, skip_dates=cached_dates
-    )
+    df = finra_short_volume.fetch_range(tickers, start=start, skip_dates=cached_dates)
     if df.empty and not cached_dates:
         summary["sources_failed"] = summary.get("sources_failed", []) + ["finra_short_volume"]
         log.warning("no FINRA short-volume data fetched (network blocked?)")
@@ -93,13 +100,13 @@ def _refresh_short_volume(conn, cfg: Config, summary: dict, price_frames) -> Non
     store.mark_refreshed(conn, "short_volume")
 
 
-def _refresh_ats(conn, cfg: Config, summary: dict, price_frames) -> None:
+def _refresh_ats(conn, cfg: Config, summary: dict, price_frames, tickers: list[str]) -> None:
     if cfg.demo_mode:
         for ticker, pf in price_frames.items():
             store.upsert_df(conn, "ats_weekly", demo.demo_ats_weekly(ticker, pf))
         store.mark_refreshed(conn, "ats_weekly")
         return
-    df = finra_ats.fetch_weekly(cfg.watchlist)
+    df = finra_ats.fetch_weekly(tickers)
     if df.empty:
         summary["sources_failed"] = summary.get("sources_failed", []) + ["finra_ats"]
         return
@@ -107,14 +114,17 @@ def _refresh_ats(conn, cfg: Config, summary: dict, price_frames) -> None:
     store.mark_refreshed(conn, "ats_weekly")
 
 
-def _refresh_13f(conn, cfg: Config, summary: dict) -> None:
+def _refresh_13f(conn, cfg: Config, summary: dict, tickers: list[str]) -> None:
     if cfg.demo_mode:
-        for ticker in cfg.watchlist:
+        for ticker in tickers:
             store.upsert_df(conn, "inst_13f", demo.demo_13f(ticker, cfg.managers_13f))
         store.mark_refreshed(conn, "inst_13f")
         return
     if not cfg.managers_13f:
         return
+    # Matched by config/watchlist.yaml's issuer_aliases, not by `tickers` —
+    # a ticker added via the UI without a corresponding alias entry simply
+    # won't get 13F data, same as any ticker missing an alias today.
     df = sec_13f.fetch_13f_holdings(
         cfg.managers_13f, cfg.issuer_aliases, cfg.sec_user_agent
     )
@@ -125,8 +135,8 @@ def _refresh_13f(conn, cfg: Config, summary: dict) -> None:
     store.mark_refreshed(conn, "inst_13f")
 
 
-def _recompute_metrics(conn, cfg: Config, summary: dict, price_frames) -> None:
-    for ticker in cfg.watchlist:
+def _recompute_metrics(conn, cfg: Config, summary: dict, price_frames, tickers: list[str]) -> None:
+    for ticker in tickers:
         pf = price_frames.get(ticker)
         if pf is None or pf.empty:
             continue
