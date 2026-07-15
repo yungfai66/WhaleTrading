@@ -18,17 +18,27 @@ from plotly.subplots import make_subplots
 
 from whaletrading import signals
 from whaletrading.config import load_config
+from whaletrading.data import gist_store
 from whaletrading.data import prices as prices_mod
 from whaletrading.data import store
 from whaletrading.pipeline import refresh_all
 
-# Streamlit Cloud secrets don't auto-populate os.environ — bridge the one
-# setting we read that way. No-op locally (no secrets.toml) or off Cloud.
-try:
-    if "WHALETRADING_DEMO" in st.secrets:
-        os.environ.setdefault("WHALETRADING_DEMO", str(st.secrets["WHALETRADING_DEMO"]))
-except Exception:
-    pass
+# Streamlit Cloud secrets don't auto-populate os.environ — bridge the ones we
+# read that way. No-op locally (no secrets.toml) or off Cloud.
+for _key in ("WHALETRADING_DEMO", "GITHUB_GIST_TOKEN", "GITHUB_GIST_ID"):
+    try:
+        if _key in st.secrets:
+            os.environ.setdefault(_key, str(st.secrets[_key]))
+    except Exception:
+        pass
+
+
+def gist_configured() -> tuple[str, str] | None:
+    """(token, gist_id) if cross-device watchlist sync is set up, else None —
+    optional feature, app works session-only without it (see README)."""
+    token = os.environ.get("GITHUB_GIST_TOKEN")
+    gist_id = os.environ.get("GITHUB_GIST_ID")
+    return (token, gist_id) if token and gist_id else None
 
 # Validated palette (dataviz reference, light mode).
 C = {
@@ -91,15 +101,37 @@ NAV_OPTIONS = ["📊 Overview", "📈 Ticker detail"]
 
 
 def get_working_watchlist(cfg) -> list[str]:
-    """The ticker list actually shown, after this session's pins/adds/
-    removes/reordering. Starts as a copy of cfg.watchlist. Session-scoped
-    only (see manage_watchlist_panel) — resets on page reload, since the
+    """The ticker list actually shown, after pins/adds/removes/reordering.
+    Starts as a copy of cfg.watchlist, seeded from a synced GitHub Gist
+    when cross-device sync is configured (see gist_configured / README) —
+    otherwise session-scoped only and resets on page reload, since the
     app's filesystem is ephemeral on Streamlit Cloud and silently rewriting
     config/watchlist.yaml would look like it worked locally but lose the
     change on every redeploy there."""
-    st.session_state.setdefault("watchlist_order", list(cfg.watchlist))
-    st.session_state.setdefault("pinned_tickers", set())
+    if "watchlist_order" not in st.session_state:
+        synced = None
+        creds = gist_configured()
+        if creds:
+            synced = gist_store.load_watchlist_state(*creds)
+        if synced and synced.get("watchlist_order"):
+            st.session_state["watchlist_order"] = list(synced["watchlist_order"])
+            st.session_state["pinned_tickers"] = set(synced.get("pinned_tickers", []))
+        else:
+            st.session_state["watchlist_order"] = list(cfg.watchlist)
+            st.session_state["pinned_tickers"] = set()
     return st.session_state["watchlist_order"]
+
+
+def sync_watchlist_state(order: list[str], pinned: set[str]) -> None:
+    """Push the current order/pins to the Gist when sync is configured.
+    Fails open — a sync error never blocks the pin/add/remove/reorder
+    action itself, it just means this particular change won't show up on
+    other devices until the next successful save."""
+    creds = gist_configured()
+    if not creds:
+        return
+    if not gist_store.save_watchlist_state(*creds, order, sorted(pinned)):
+        st.warning("Couldn't sync to your other devices right now — this change is still saved for this session.")
 
 
 def _table_height(n_rows: int) -> int:
@@ -293,10 +325,10 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
         vertical_spacing=0.05,
         row_heights=[0.45, 0.12, 0.25, 0.18],
         subplot_titles=(
-            "Price · EMA ribbon · signals",
+            "Price · EMA (Exponential Moving Average) ribbon · signals",
             "Volume (trend-colored)",
             "Whale (red) vs retail (green) accumulation",
-            "MACD",
+            "MACD (Moving Average Convergence Divergence)",
         ),
     )
 
@@ -516,7 +548,14 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
         margin=dict(l=40, r=20, t=90, b=30),
         xaxis_rangeslider_visible=False,
     )
-    fig.update_xaxes(gridcolor=C["grid"], zeroline=False)
+    # Quarterly gridlines/ticks (Jan/Apr/Jul/Oct 1st), regardless of the
+    # selected time range or Plotly's own auto-spacing, as a consistent
+    # reference grid across all 4 panels.
+    fig.update_xaxes(gridcolor=C["grid"], zeroline=False, dtick="M3", tick0="2020-01-01")
+    # shared_xaxes hides date labels on every row but the bottom one by
+    # default — show them on the price panel too so you don't have to look
+    # all the way down to the MACD panel to tell what date you're looking at.
+    fig.update_xaxes(showticklabels=True, row=1, col=1)
     fig.update_yaxes(gridcolor=C["grid"], zeroline=False)
     fig.update_yaxes(range=[0, 100], row=3, col=1)
     return fig
@@ -612,14 +651,24 @@ def manage_watchlist_panel(cfg) -> None:
         if st.session_state.pop("_clear_add_ticker_input", False):
             st.session_state["add_ticker_input"] = ""
 
-        st.caption(
-            "📌 Pin a stock to keep it at the top of the table. Changes here "
-            "apply only to **your current browser session** and reset if you "
-            "reload the page — for permanent changes, edit "
-            "`config/watchlist.yaml` in the repo instead. After **adding** a "
-            "ticker, click **Refresh data now** in the sidebar to fetch its "
-            "data before it shows up with real numbers."
-        )
+        if gist_configured():
+            st.caption(
+                "📌 Pin a stock to keep it at the top of the table. Changes here "
+                "**sync across your devices/browsers** (via the GitHub Gist "
+                "configured in secrets). After **adding** a ticker, click "
+                "**🔄 Refresh data** at the top of the page to fetch its data "
+                "before it shows up with real numbers."
+            )
+        else:
+            st.caption(
+                "📌 Pin a stock to keep it at the top of the table. Changes here "
+                "apply only to **your current browser session** and reset if you "
+                "reload the page — for permanent changes, edit "
+                "`config/watchlist.yaml` in the repo instead, or set up free "
+                "cross-device sync (see README). After **adding** a ticker, "
+                "click **🔄 Refresh data** at the top of the page to fetch its "
+                "data before it shows up with real numbers."
+            )
         c1, c2 = st.columns([4, 1], gap="small")
         new_ticker = c1.text_input(
             "Add a ticker symbol",
@@ -634,6 +683,7 @@ def manage_watchlist_panel(cfg) -> None:
             else:
                 working.append(sym)
                 st.session_state["_clear_add_ticker_input"] = True
+                sync_watchlist_state(working, pinned)
                 st.rerun()
 
         if not working:
@@ -649,6 +699,7 @@ def manage_watchlist_panel(cfg) -> None:
         hdr[4].caption("↓")
         hdr[5].caption("⤓")
         hdr[6].caption("Del")
+        pinned_before = set(pinned)
         for i, ticker in enumerate(working):
             row = st.columns(ROW_COLS, gap="small")
             is_pinned = row[0].checkbox(
@@ -661,22 +712,33 @@ def manage_watchlist_panel(cfg) -> None:
             row[1].write(f"**{ticker}**")
             if row[2].button("⤒", key=f"top_{ticker}", disabled=(i == 0), help="Move to top"):
                 working.insert(0, working.pop(i))
+                sync_watchlist_state(working, pinned)
                 st.rerun()
             if row[3].button("↑", key=f"up_{ticker}", disabled=(i == 0), help="Move up"):
                 working[i - 1], working[i] = working[i], working[i - 1]
+                sync_watchlist_state(working, pinned)
                 st.rerun()
             if row[4].button("↓", key=f"down_{ticker}", disabled=(i == len(working) - 1), help="Move down"):
                 working[i + 1], working[i] = working[i], working[i + 1]
+                sync_watchlist_state(working, pinned)
                 st.rerun()
             if row[5].button("⤓", key=f"bottom_{ticker}", disabled=(i == len(working) - 1), help="Move to bottom"):
                 working.append(working.pop(i))
+                sync_watchlist_state(working, pinned)
                 st.rerun()
             if row[6].button("🗑️", key=f"del_{ticker}", help=f"Remove {ticker} from your watchlist"):
                 working.remove(ticker)
                 pinned.discard(ticker)
                 if st.session_state.get("detail_ticker") == ticker:
                     st.session_state["detail_ticker"] = working[0] if working else None
+                sync_watchlist_state(working, pinned)
                 st.rerun()
+
+        # Pin checkboxes trigger Streamlit's own implicit rerun (no explicit
+        # st.rerun() above to hang a save call off), so sync here instead,
+        # once per render, only when a pin actually changed this run.
+        if pinned != pinned_before:
+            sync_watchlist_state(working, pinned)
 
 
 def overview_page(cfg):

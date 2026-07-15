@@ -123,6 +123,38 @@ Community Cloud containers sleep after inactivity and reset their filesystem
 on redeploy/wake, which is exactly what the auto-bootstrap step above exists
 to handle.
 
+## Sync your watchlist across devices (optional, free)
+
+The **Manage watchlist** panel (pin/add/remove/reorder tickers) is
+session-only by default: it resets on a page reload, and each browser/device
+keeps its own separate list, because Community Cloud's filesystem is
+ephemeral — silently rewriting `config/watchlist.yaml` on disk would look
+like it worked locally but lose the change on every redeploy.
+
+To make it persist and sync across devices instead, at zero cost, the app
+can optionally store it in a private GitHub Gist:
+
+1. Create a **private** Gist at [gist.github.com](https://gist.github.com)
+   with one file named `watchlist_state.json` containing `{}`. Copy its ID
+   from the URL (`https://gist.github.com/<user>/<this-part>`).
+2. Create a GitHub **Personal Access Token** scoped to **`gist` only** — not
+   repo access, to keep the blast radius small if it ever leaks. (Settings →
+   Developer settings → Personal access tokens.)
+3. In Streamlit Cloud → your app → Settings → Secrets, add:
+   ```
+   GITHUB_GIST_TOKEN = "<your token>"
+   GITHUB_GIST_ID = "<your gist id>"
+   ```
+   (See `.streamlit/secrets.toml.example`.)
+4. Reboot the app. The Manage watchlist panel's caption will confirm sync is
+   active — pins/order/added tickers now save to the Gist on every change
+   and load from it on every new session, on any device.
+
+If sync fails for any reason (bad token, network hiccup, rate limit), the
+app falls back to session-only behavior for that change and shows a small
+warning — it never blocks the pin/add/remove/reorder action itself. Omit
+both secrets to keep today's session-only behavior.
+
 ## Customization — `config/watchlist.yaml`
 
 - **watchlist** — add/remove any NYSE/NASDAQ tickers
