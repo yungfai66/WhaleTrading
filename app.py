@@ -372,6 +372,28 @@ def load_overview(watchlist: tuple[str, ...]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+# Shown as a native Plotly hover tooltip on each panel's title (see
+# `captureevents`/`hovertext` below) — order matches `subplot_titles`.
+PANEL_HELP = (
+    "Candlesticks show price.<br>The trend ribbon (EMA lines) shows<br>"
+    "trend direction — red/bullish, blue/bearish.<br>"
+    "The bold red line is the closing price.<br>"
+    "🟢/🔴 triangles mark exactly where<br>a buy/sell signal fired.",
+    "MACD tracks momentum.<br>Blue = MACD line, orange = signal line.<br>"
+    "Blue crossing above orange = golden cross<br>"
+    "(momentum turning up); below = death cross<br>"
+    "(turning down). A golden cross only counts<br>"
+    "toward a buy signal when whale buying<br>is also rising.",
+    "Red bars = estimated whale (big-investor)<br>"
+    "buying; green bars = estimated retail buying.<br>"
+    "Both 0-100, 50 = neutral.<br>"
+    "Dashed lines mark the momentum / rise / soar<br>zone thresholds.",
+    "Trading volume per bar, colored to match<br>"
+    "the trend ribbon — red = bullish trend,<br>"
+    "blue = bearish trend, gray = mixed/neutral.",
+)
+
+
 def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.Figure:
     fig = make_subplots(
         rows=4,
@@ -379,11 +401,13 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
         shared_xaxes=True,
         vertical_spacing=0.05,
         row_heights=[0.45, 0.18, 0.25, 0.12],
+        # ⓘ hints that each title is hoverable (see PANEL_HELP / captureevents
+        # below) for a plain-language explanation of that panel.
         subplot_titles=(
-            "Price · EMA (Exponential Moving Average) ribbon · signals",
-            "MACD (Moving Average Convergence Divergence)",
-            "Whale (red) vs retail (green) accumulation",
-            "Volume (trend-colored)",
+            "Price · EMA (Exponential Moving Average) ribbon · signals ⓘ",
+            "MACD (Moving Average Convergence Divergence) ⓘ",
+            "Whale (red) vs retail (green) accumulation ⓘ",
+            "Volume (trend-colored) ⓘ",
         ),
     )
 
@@ -630,6 +654,7 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
         plot_bgcolor=C["surface"],
         font=dict(color=C["ink2"], family='system-ui, -apple-system, "Segoe UI", sans-serif'),
         hovermode="x unified",
+        hoverlabel=dict(bgcolor=C["surface"], bordercolor=C["grid"], font=dict(size=11, color=C["ink2"])),
         legend=dict(y=1.0, **legend_style),
         legend2=dict(y=0.5675, **legend_style),
         legend3=dict(y=0.3645, **legend_style),
@@ -654,6 +679,11 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
     # title (always the first of the 4 subplot_titles annotations) further
     # up so the two don't overlap.
     fig.layout.annotations[0].update(yshift=18)
+    # Hovering any panel title shows a plain-language explanation of that
+    # panel — captureevents=True is what makes an otherwise-static text
+    # annotation respond to mouse hover at all.
+    for i, help_text in enumerate(PANEL_HELP):
+        fig.layout.annotations[i].update(hovertext=help_text, captureevents=True)
     return fig
 
 
