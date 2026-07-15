@@ -323,12 +323,12 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
         cols=1,
         shared_xaxes=True,
         vertical_spacing=0.05,
-        row_heights=[0.45, 0.12, 0.25, 0.18],
+        row_heights=[0.45, 0.18, 0.25, 0.12],
         subplot_titles=(
             "Price · EMA (Exponential Moving Average) ribbon · signals",
-            "Volume (trend-colored)",
-            "Whale (red) vs retail (green) accumulation",
             "MACD (Moving Average Convergence Divergence)",
+            "Whale (red) vs retail (green) accumulation",
+            "Volume (trend-colored)",
         ),
     )
 
@@ -412,7 +412,7 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
         col=1,
     )
 
-    # ── Panel 2: volume colored by ribbon trend ─────────────────────────
+    # ── Panel 4: volume colored by ribbon trend ─────────────────────────
     trend_color = pd.Series(C["neutral"], index=frame.index)
     trend_color[frame["ribbon_bullish"]] = C["whale"]   # "red ribbon" = bullish
     trend_color[frame["ribbon_bearish"]] = C["blue"]    # "blue ribbon" = bearish
@@ -425,7 +425,7 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
             showlegend=False,
             hovertemplate="%{x|%Y-%m-%d}<br>vol %{y:,.0f}<extra></extra>",
         ),
-        row=2,
+        row=4,
         col=1,
     )
 
@@ -462,7 +462,7 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
             col=1,
         )
 
-    # ── Panel 4: MACD ───────────────────────────────────────────────────
+    # ── Panel 2: MACD ───────────────────────────────────────────────────
     hist_colors = [C["up"] if v >= 0 else C["down"] for v in frame["macd_hist"]]
     fig.add_trace(
         go.Bar(
@@ -473,7 +473,7 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
             showlegend=False,
             hoverinfo="skip",
         ),
-        row=4,
+        row=2,
         col=1,
     )
     fig.add_trace(
@@ -481,7 +481,7 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
             x=frame.index, y=frame["macd"], mode="lines",
             line=dict(color=C["blue"], width=2), name="MACD",
         ),
-        row=4,
+        row=2,
         col=1,
     )
     fig.add_trace(
@@ -489,7 +489,7 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
             x=frame.index, y=frame["macd_signal"], mode="lines",
             line=dict(color=C["orange"], width=2), name="Signal",
         ),
-        row=4,
+        row=2,
         col=1,
     )
     golden = frame[frame["macd_golden_cross"]]
@@ -502,7 +502,7 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
             name="Golden cross",
             hovertemplate="Golden cross %{x|%Y-%m-%d}<br>momentum turning up<extra></extra>",
         ),
-        row=4,
+        row=2,
         col=1,
     )
     fig.add_trace(
@@ -513,7 +513,7 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
             name="Death cross",
             hovertemplate="Death cross %{x|%Y-%m-%d}<br>momentum turning down (not wired to a verdict)<extra></extra>",
         ),
-        row=4,
+        row=2,
         col=1,
     )
 
@@ -898,7 +898,7 @@ active right now** — they just differ in what's happening in the background.
 the whale score to be rising):
 - price bounces back up after falling, while the trend ribbon is tight
 - the trend ribbon flips from a downtrend to an uptrend
-- a "MACD golden cross" — a sign momentum is turning upward (see Panel 4 below)
+- a "MACD golden cross" — a sign momentum is turning upward (see Panel 2 below)
 
 **What triggers a 🔴 SELL SIGNAL (Trim warning):**
 - the whale score falls while the retail score rises during an uptrend —
@@ -917,14 +917,7 @@ ribbon overlaid.
 - **Blue** ribbon = downtrend. **Red** ribbon = uptrend.
 - 🟢/🔴 triangles mark exactly where a buy/sell signal fired.
 
-**Panel 2 — Volume:** how many shares traded each period, colored to match
-the trend ribbon.
-
-**Panel 3 — Whale vs retail score:** the whale score (red bars) and retail
-score (green bars) explained above, over time, with dashed lines at the
-momentum/rise/soar zone thresholds.
-
-**Panel 4 — MACD (Moving Average Convergence Divergence):** a separate
+**Panel 2 — MACD (Moving Average Convergence Divergence):** a separate
 momentum indicator (momentum = whether price is speeding up or slowing down).
 - **MACD line** (blue) and **Signal line** (orange) — when the blue line
   crosses above the orange one, that's a **golden cross** (momentum turning
@@ -933,6 +926,13 @@ momentum indicator (momentum = whether price is speeding up or slowing down).
   *also* rising at the same time — momentum alone is never enough on its
   own. The death cross is shown for reference but doesn't currently trigger
   a 🟠 sell signal by itself.
+
+**Panel 3 — Whale vs retail score:** the whale score (red bars) and retail
+score (green bars) explained above, over time, with dashed lines at the
+momentum/rise/soar zone thresholds.
+
+**Panel 4 — Volume:** how many shares traded each period, colored to match
+the trend ribbon.
 
 ⚠️ *These are estimates built from free public data (FINRA off-exchange
 trading volume, SEC 13F filings, price/volume patterns) — no public data
