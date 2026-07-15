@@ -235,6 +235,13 @@ def load_quote(ticker: str) -> float | None:
     return prices_mod.fetch_quote(ticker)
 
 
+@st.cache_data(ttl=60 * 60 * 24)
+def load_company_name(ticker: str) -> str | None:
+    """Company/issuer name, e.g. "NVIDIA Corporation" for NVDA. Long TTL —
+    this practically never changes. Best-effort: None on any failure."""
+    return prices_mod.company_name(ticker)
+
+
 @st.cache_data(ttl=300)
 def load_latest_daily(ticker: str) -> pd.Series | None:
     """The single most recent completed daily bar, independent of whatever
@@ -955,33 +962,12 @@ def detail_page(cfg, ticker: str, timeframe: str):
             "reliable demo instead."
         )
         return
-
-    range_labels = list(RANGE_PRESETS) + ["Custom"]
-    default_idx = range_labels.index(DEFAULT_RANGE[timeframe])
-    range_label = st.radio(
-        "Time range",
-        range_labels,
-        horizontal=True,
-        index=default_idx,
-        key=f"range_{ticker}",
-        help="How far back the chart displays. This only changes the view — it doesn't affect the verdict above.",
-    )
-    if range_label == "Custom":
-        c1, c2 = st.columns(2)
-        start = c1.date_input("From", value=frame.index.min().date(), key=f"from_{ticker}")
-        end = c2.date_input("To", value=frame.index.max().date(), key=f"to_{ticker}")
-        frame = frame.loc[str(start) : str(end)]
-    else:
-        days = RANGE_PRESETS[range_label]
-        if days is not None:
-            cutoff = frame.index.max() - pd.Timedelta(days=days)
-            frame = frame[frame.index >= cutoff]
-
-    if frame.empty:
-        st.warning("No bars in the selected range — widen the time range.")
-        return
     thr = cfg.thresholds_for(ticker)
 
+    # Metrics always reflect the latest data regardless of the chart's
+    # selected time range — same reasoning as the Close price fix below:
+    # zooming the chart into a narrower window shouldn't make the current
+    # whale/retail score look "stuck" on an older value.
     latest = frame.iloc[-1]
     zone = signals.zone_label(float(latest["whale_score"]), thr)
 
@@ -992,6 +978,8 @@ def detail_page(cfg, ticker: str, timeframe: str):
     # independent of the chart's bar size, plus a best-effort live quote.
     latest_daily = load_latest_daily(ticker)
     quote = None if cfg.demo_mode else load_quote(ticker)
+    company = None if cfg.demo_mode else load_company_name(ticker)
+    st.markdown(f"#### {ticker}" + (f" — {company}" if company else ""))
 
     m1, m2, m3, m4 = st.columns(4)
     if quote is not None:
@@ -1054,8 +1042,36 @@ def detail_page(cfg, ticker: str, timeframe: str):
         help="Whale-score threshold band: weak <35 · momentum 35-50 · rise 50-75 · soar >75 (per-ticker configurable in config/watchlist.yaml).",
     )
 
+    # Right above the chart (and its legend), for quick adjustment while
+    # looking at it, rather than scrolled away above the metrics.
+    range_labels = list(RANGE_PRESETS) + ["Custom"]
+    default_idx = range_labels.index(DEFAULT_RANGE[timeframe])
+    range_label = st.radio(
+        "Time range",
+        range_labels,
+        horizontal=True,
+        index=default_idx,
+        key=f"range_{ticker}",
+        help="How far back the chart displays. This only changes the view — it doesn't affect the verdict or metrics above.",
+    )
+    chart_frame = frame
+    if range_label == "Custom":
+        c1, c2 = st.columns(2)
+        start = c1.date_input("From", value=frame.index.min().date(), key=f"from_{ticker}")
+        end = c2.date_input("To", value=frame.index.max().date(), key=f"to_{ticker}")
+        chart_frame = frame.loc[str(start) : str(end)]
+    else:
+        days = RANGE_PRESETS[range_label]
+        if days is not None:
+            cutoff = frame.index.max() - pd.Timedelta(days=days)
+            chart_frame = frame[frame.index >= cutoff]
+
+    if chart_frame.empty:
+        st.warning("No bars in the selected range — widen the time range.")
+        return
+
     st.plotly_chart(
-        four_panel_figure(frame, ticker, thr),
+        four_panel_figure(chart_frame, ticker, thr),
         use_container_width=True,
         config={"displayModeBar": False},
     )
@@ -1081,7 +1097,7 @@ def detail_page(cfg, ticker: str, timeframe: str):
                 use_container_width=True,
                 height=_table_height(len(by_period)),
             )
-        tail = frame[
+        tail = chart_frame[
             ["close", "volume", "whale_score", "retail_score",
              "buy_signal", "buy_reason", "sell_signal", "sell_reason"]
         ].tail(50)
