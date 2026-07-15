@@ -704,7 +704,7 @@ def manage_watchlist_panel(cfg) -> None:
                 "📌 Pin a stock to keep it at the top of the table. Changes here "
                 "**sync across your devices/browsers** (via the GitHub Gist "
                 "configured in secrets). After **adding** a ticker, click "
-                "**🔄 Refresh data** at the top of the page to fetch its data "
+                "**🔄 Refresh data** above (left panel) to fetch its data "
                 "before it shows up with real numbers."
             )
         else:
@@ -714,17 +714,16 @@ def manage_watchlist_panel(cfg) -> None:
                 "reload the page — for permanent changes, edit "
                 "`config/watchlist.yaml` in the repo instead, or set up free "
                 "cross-device sync (see README). After **adding** a ticker, "
-                "click **🔄 Refresh data** at the top of the page to fetch its "
+                "click **🔄 Refresh data** above (left panel) to fetch its "
                 "data before it shows up with real numbers."
             )
-        c1, c2 = st.columns([4, 1], gap="small")
-        new_ticker = c1.text_input(
+        new_ticker = st.text_input(
             "Add a ticker symbol",
             key="add_ticker_input",
             label_visibility="collapsed",
             placeholder="Add a ticker, e.g. GOOG",
         )
-        if c2.button("➕ Add", use_container_width=True) and new_ticker.strip():
+        if st.button("➕ Add", use_container_width=True) and new_ticker.strip():
             sym = new_ticker.strip().upper()
             if sym in working:
                 st.warning(f"{sym} is already in your watchlist.")
@@ -738,49 +737,50 @@ def manage_watchlist_panel(cfg) -> None:
             st.warning("Your watchlist is empty — add a ticker above.")
             return
 
-        ROW_COLS = [0.6, 2.2, 0.55, 0.55, 0.55, 0.55, 0.6]
-        hdr = st.columns(ROW_COLS, gap="small")
-        hdr[0].caption("Pin")
-        hdr[1].caption("Ticker")
-        hdr[2].caption("⤒")
-        hdr[3].caption("↑")
-        hdr[4].caption("↓")
-        hdr[5].caption("⤓")
-        hdr[6].caption("Del")
+        # Two rows per ticker (pin+name+delete, then the 4 move buttons)
+        # rather than one 7-column row — this panel lives in the narrow
+        # left sidebar now, where 7 side-by-side columns wrap unreadably.
         pinned_before = set(pinned)
         for i, ticker in enumerate(working):
-            row = st.columns(ROW_COLS, gap="small")
-            is_pinned = row[0].checkbox(
+            top = st.columns([0.5, 2, 0.6], gap="small")
+            is_pinned = top[0].checkbox(
                 "Pin", value=ticker in pinned, key=f"pin_{ticker}", label_visibility="collapsed"
             )
             if is_pinned:
                 pinned.add(ticker)
             else:
                 pinned.discard(ticker)
-            row[1].write(f"**{ticker}**")
-            if row[2].button("⤒", key=f"top_{ticker}", disabled=(i == 0), help="Move to top"):
-                working.insert(0, working.pop(i))
-                sync_watchlist_state(working, pinned)
-                st.rerun()
-            if row[3].button("↑", key=f"up_{ticker}", disabled=(i == 0), help="Move up"):
-                working[i - 1], working[i] = working[i], working[i - 1]
-                sync_watchlist_state(working, pinned)
-                st.rerun()
-            if row[4].button("↓", key=f"down_{ticker}", disabled=(i == len(working) - 1), help="Move down"):
-                working[i + 1], working[i] = working[i], working[i + 1]
-                sync_watchlist_state(working, pinned)
-                st.rerun()
-            if row[5].button("⤓", key=f"bottom_{ticker}", disabled=(i == len(working) - 1), help="Move to bottom"):
-                working.append(working.pop(i))
-                sync_watchlist_state(working, pinned)
-                st.rerun()
-            if row[6].button("🗑️", key=f"del_{ticker}", help=f"Remove {ticker} from your watchlist"):
+            top[1].write(f"**{ticker}**")
+            if top[2].button("🗑️", key=f"del_{ticker}", help=f"Remove {ticker} from your watchlist"):
                 working.remove(ticker)
                 pinned.discard(ticker)
                 if st.session_state.get("detail_ticker") == ticker:
                     st.session_state["detail_ticker"] = working[0] if working else None
                 sync_watchlist_state(working, pinned)
                 st.rerun()
+
+            mv = st.columns(4, gap="small")
+            if mv[0].button("⤒", key=f"top_{ticker}", disabled=(i == 0), help="Move to top", use_container_width=True):
+                working.insert(0, working.pop(i))
+                sync_watchlist_state(working, pinned)
+                st.rerun()
+            if mv[1].button("↑", key=f"up_{ticker}", disabled=(i == 0), help="Move up", use_container_width=True):
+                working[i - 1], working[i] = working[i], working[i - 1]
+                sync_watchlist_state(working, pinned)
+                st.rerun()
+            if mv[2].button("↓", key=f"down_{ticker}", disabled=(i == len(working) - 1), help="Move down", use_container_width=True):
+                working[i + 1], working[i] = working[i], working[i + 1]
+                sync_watchlist_state(working, pinned)
+                st.rerun()
+            if mv[3].button("⤓", key=f"bottom_{ticker}", disabled=(i == len(working) - 1), help="Move to bottom", use_container_width=True):
+                working.append(working.pop(i))
+                sync_watchlist_state(working, pinned)
+                st.rerun()
+            if i < len(working) - 1:
+                st.markdown(
+                    '<hr style="margin:0.25rem 0 !important; opacity:0.4;">',
+                    unsafe_allow_html=True,
+                )
 
         # Pin checkboxes trigger Streamlit's own implicit rerun (no explicit
         # st.rerun() above to hang a save call off), so sync here instead,
@@ -792,7 +792,6 @@ def manage_watchlist_panel(cfg) -> None:
 def overview_page(cfg):
     st.subheader("Watchlist overview")
     freshness_panel(cfg.demo_mode)
-    manage_watchlist_panel(cfg)
 
     working = get_working_watchlist(cfg)
     pinned = st.session_state["pinned_tickers"]
@@ -992,13 +991,12 @@ weekly. This is not financial advice.*
 
 def detail_page(cfg, ticker: str, timeframe: str):
     verdict_banner(ticker, cfg.thresholds_for(ticker))
-    how_to_read_expander()
 
     frame = load_ticker_frame(ticker, timeframe)
     if frame.empty:
         st.warning(
-            "No data cached for this ticker yet. Click **🔄 Refresh** at the top of "
-            "the page — if it still comes up empty, live FINRA/EDGAR/Yahoo fetches may "
+            "No data cached for this ticker yet. Click **🔄 Refresh data** in the left "
+            "panel — if it still comes up empty, live FINRA/EDGAR/Yahoo fetches may "
             "be failing on this host; set the `WHALETRADING_DEMO=1` secret for a "
             "reliable demo instead."
         )
@@ -1177,14 +1175,13 @@ def main():
         bootstrap_data(cfg)
     auto_refresh_if_stale(cfg)
 
-    title_col, refresh_col = st.columns([3, 1.3], gap="small")
-    with title_col:
-        st.markdown("### 🐋 WhaleTrading")
-        st.caption(
-            "Institutional (whale) accumulation tracker on free data. See 🕐 Data "
-            "freshness and 📖 How to read this for definitions."
-        )
-    with refresh_col:
+    # Left panel: navigation + the controls that apply regardless of which
+    # page you're on. Collapsible and resizable by dragging its right edge —
+    # both native Streamlit sidebar behavior, nothing custom needed here.
+    with st.sidebar:
+        view = st.radio("View", NAV_OPTIONS, key="nav_view")
+        st.divider()
+
         conn = store.connect()
         last = store.get_meta(conn, "last_refresh:pipeline")
         conn.close()
@@ -1207,6 +1204,17 @@ def main():
             st.cache_data.clear()
             st.rerun()
         st.caption(f"Last refresh: {_format_singapore(last)}")
+        st.divider()
+
+        manage_watchlist_panel(cfg)
+        how_to_read_expander()
+
+    st.markdown("### 🐋 WhaleTrading")
+    st.caption(
+        "Institutional (whale) accumulation tracker on free data. See 🕐 Data "
+        "freshness on the Overview page and 📖 How to read this in the left "
+        "panel for definitions."
+    )
 
     if cfg.demo_mode:
         st.info(
@@ -1217,18 +1225,13 @@ def main():
         )
 
     if not working:
-        st.warning("Your watchlist is empty. Switch to Overview → Manage watchlist to add a ticker.")
-        view = NAV_OPTIONS[0]
+        st.warning("Your watchlist is empty. Use Manage watchlist in the left panel to add a ticker.")
         ticker, timeframe = None, "W"
     else:
-        # Persistent top bar: view toggle, ticker, and bar size are always
-        # visible together, on both pages — so you can line up the next
-        # stock's chart while still looking at the Overview table, then flip
-        # the toggle, instead of hunting for these controls inside the page.
-        nav_col, tk_col, bs_col = st.columns([1.2, 2, 1.1], gap="small")
-        view = nav_col.radio(
-            "View", NAV_OPTIONS, horizontal=True, key="nav_view", label_visibility="collapsed"
-        )
+        # Ticker + bar size stay in the main area (not the left panel) so
+        # they're always visible without opening it — quick to adjust while
+        # looking at the chart.
+        tk_col, bs_col = st.columns([2, 1.1], gap="small")
         if st.session_state.get("detail_ticker") not in working:
             st.session_state["detail_ticker"] = working[0]
 
