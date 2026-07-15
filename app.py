@@ -44,6 +44,7 @@ C = {
     "blue": "#2a78d6",      # bearish ("blue") ribbon / MACD line
     "orange": "#eb6834",    # MACD signal line
     "violet": "#4a3aa7",
+    "price_line": "#a91b1b",  # close-price line — darker than candle red so it doesn't blend into down candles
     "buy": "#0ca30c",
     "sell": "#d03b3b",
     "neutral": "#c3c2b7",
@@ -324,7 +325,7 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
             x=frame.index,
             y=frame["close"],
             mode="lines",
-            line=dict(color=C["violet"], width=1.6),
+            line=dict(color=C["price_line"], width=1.6),
             name="Close price (line)",
             opacity=0.9,
             hoverinfo="skip",
