@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -88,9 +90,22 @@ NAV_OPTIONS = ["📊 Overview", "📈 Ticker detail"]
 
 
 def _table_height(n_rows: int) -> int:
-    """Fit every row without the dataframe's own internal scrollbar — the
-    page scrolls instead, avoiding a scrollbar nested inside a scrollbar."""
-    return 38 + 35 * max(n_rows, 1) + 3
+    """Size the dataframe container so every row is visible with no internal
+    scrollbar — the page scrolls instead, never a scrollbar nested inside a
+    scrollbar. Deliberately generous (not an exact-fit calculation): actual
+    row height depends on the viewer's font size/zoom/OS text scaling, which
+    we can't know in advance, so this overestimates. A little empty space
+    at the bottom of the table is fine; a stray inner scrollbar is not."""
+    return 150 + 46 * max(n_rows, 1)
+
+
+def _format_singapore(iso_ts: str | None) -> str:
+    """Format a stored UTC ISO timestamp (see store.mark_refreshed) in
+    Singapore time, since that's the viewer's timezone."""
+    if not iso_ts:
+        return "never"
+    dt = datetime.fromisoformat(iso_ts).astimezone(ZoneInfo("Asia/Singapore"))
+    return dt.strftime("%Y-%m-%d %H:%M") + " SGT"
 
 
 st.set_page_config(page_title="WhaleTrading", page_icon="🐋", layout="wide")
@@ -99,11 +114,17 @@ st.set_page_config(page_title="WhaleTrading", page_icon="🐋", layout="wide")
 # only holds the refresh button + a config hint, so it doesn't need the
 # space the main charts do. Users can still drag it wider if they want —
 # this only changes the default.
+#
+# Also trims Streamlit's large default top padding and divider margins,
+# which otherwise stack up into a noticeable gap between the title and the
+# "Watchlist overview" section below the nav row.
 st.markdown(
     """
     <style>
     [data-testid="stSidebar"] { width: 190px !important; min-width: 190px !important; }
     [data-testid="stSidebar"] > div:first-child { width: 190px !important; }
+    .block-container { padding-top: 2rem !important; }
+    hr { margin: 0.6rem 0 !important; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -897,14 +918,20 @@ def main():
         "on each stock's page for full definitions."
     )
     if cfg.demo_mode:
-        st.info("Demo mode: synthetic data (WHALETRADING_DEMO=1). Unset it for live data.")
+        st.info(
+            "🎭 **Preview mode — every number on this page is a made-up example, not "
+            "real market data.** This was turned on so the app always has something "
+            "to show. To switch to real prices and real signals: open this app on "
+            "**Streamlit Cloud → Settings → Secrets**, delete the `WHALETRADING_DEMO` "
+            "line, then reboot the app."
+        )
 
     with st.sidebar:
         st.header("Data")
         conn = store.connect()
         last = store.get_meta(conn, "last_refresh:pipeline")
         conn.close()
-        st.write(f"Last refresh: {last[:16].replace('T', ' ') if last else 'never'} UTC")
+        st.write(f"Last refresh: {_format_singapore(last)}")
         if st.button(
             "Refresh data now",
             type="primary",
