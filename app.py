@@ -95,6 +95,20 @@ def _table_height(n_rows: int) -> int:
 
 st.set_page_config(page_title="WhaleTrading", page_icon="🐋", layout="wide")
 
+# Narrow default sidebar width (Streamlit's default is ~336px). The sidebar
+# only holds the refresh button + a config hint, so it doesn't need the
+# space the main charts do. Users can still drag it wider if they want —
+# this only changes the default.
+st.markdown(
+    """
+    <style>
+    [data-testid="stSidebar"] { width: 190px !important; min-width: 190px !important; }
+    [data-testid="stSidebar"] > div:first-child { width: 190px !important; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 
 @st.cache_resource
 def get_config():
@@ -166,13 +180,15 @@ def load_overview(watchlist: tuple[str, ...]) -> pd.DataFrame:
         thr = cfg.thresholds_for(ticker)
         act = signals.current_action(weekly, thr)
 
+        # act['detail'] already states "A buy/sell signal appeared this week: ..."
+        # when the latest bar just fired one — no need to repeat it here.
         fresh_msg = ""
         if not weekly.empty:
             latest_bar = weekly.iloc[-1]
             if bool(latest_bar["sell_signal"]):
-                fresh_msg = f"🟠 **{ticker}**: sell warning this week — {act['detail']}"
+                fresh_msg = f"🔴 **{ticker}** — {act['detail']}"
             elif bool(latest_bar["buy_signal"]):
-                fresh_msg = f"🟢 **{ticker}**: buy setup this week — {act['detail']}"
+                fresh_msg = f"🟢 **{ticker}** — {act['detail']}"
 
         rows.append(
             {
@@ -483,11 +499,11 @@ def overview_page(cfg):
     if not ok.empty:
         fresh = [m for m in ok["_fresh_msg"] if m]
         if fresh:
-            st.markdown("##### 🔔 Fresh signals this week")
+            st.markdown("##### 🔔 Buy/Sell Signals This Week")
             for msg in fresh:
-                (st.warning if msg.startswith("🟠") else st.success)(msg)
+                (st.warning if msg.startswith("🔴") else st.success)(msg)
         else:
-            st.caption("🔔 No fresh buy/sell signals this week.")
+            st.caption("🔔 No stock has an active buy or sell signal this week.")
 
         display = ok.sort_values(
             ["_sort", "Whale %"], ascending=[True, False]
@@ -507,9 +523,11 @@ def overview_page(cfg):
                 "Action": st.column_config.TextColumn(
                     "Action",
                     help=(
-                        "🟢 Buy = entry setup fired · 🟠 Trim = whales may be "
-                        "selling · 🟡 Watch = accumulating, no entry candle yet · "
-                        "🔵 Hold = uptrend intact · ⚪ Wait = no edge right now"
+                        "🟢 Buy = this IS a buy signal · 🟠 Trim = this IS a "
+                        "sell signal (take some profit) · 🟡 Watch = no signal "
+                        "yet, but conditions may be building toward one · "
+                        "🔵 Hold = no signal, trend still looks positive · "
+                        "⚪ Wait = no signal, nothing stands out"
                     ),
                 ),
                 "Close": st.column_config.NumberColumn(
@@ -522,18 +540,19 @@ def overview_page(cfg):
                     max_value=100,
                     format="%.1f",
                     help=(
-                        "Composite 0-100 score estimating institutional "
-                        "accumulation (FINRA dark-pool volume + SEC 13F filings "
-                        "+ volume-classified price action). 50 = neutral."
+                        "0-100 estimate of how much big investors (\"whales\") "
+                        "are buying this stock, built from free public data "
+                        "(FINRA dark-pool volume + SEC 13F filings + price/volume "
+                        "patterns). 50 = neutral, higher = more buying."
                     ),
                 ),
                 "Δ 20d": st.column_config.NumberColumn(
                     "Δ 20d",
-                    help="Change in whale score over the last ~20 trading days. Positive = accumulation increasing.",
+                    help="How much the Whale % has changed over the last ~20 trading days. Positive = big-investor buying increasing.",
                 ),
                 "Retail %": st.column_config.NumberColumn(
                     "Retail %",
-                    help="Composite 0-100 score estimating retail / low-volume buying pressure. 50 = neutral.",
+                    help="0-100 estimate of regular/individual-investor buying, using the same method as Whale %. 50 = neutral.",
                 ),
                 "Zone": st.column_config.TextColumn(
                     "Zone",
@@ -545,11 +564,14 @@ def overview_page(cfg):
         if clicked_rows:
             go_to_ticker(display.iloc[clicked_rows[0]]["Ticker"])
         st.caption(
-            "**Action guide:** 🟢 Buy = entry setup fired, consider DCA "
-            "(Dollar-Cost Averaging) in · "
-            "🟠 Trim = whales look like they're selling, consider taking profit · "
-            "🟡 Watch = whales accumulating, wait for the entry candle · "
-            "🔵 Hold = uptrend intact · ⚪ Wait = no edge. "
+            "**Action guide:** 🟢 Buy = this IS a buy signal, consider buying "
+            "gradually (DCA, Dollar-Cost Averaging) rather than all at once · "
+            "🟠 Trim = this IS a sell signal — big investors look like they're "
+            "selling, consider taking some profit · "
+            "🟡 Watch = no signal yet, but big-investor buying is rising and "
+            "conditions may be building toward a buy signal · "
+            "🔵 Hold = no signal, price trend still looks positive · "
+            "⚪ Wait = no signal, nothing stands out right now. "
             "Zones: momentum >35, rise >50, soar >75 (per-ticker configurable). "
             "Hover any column header above for details, or click a row for "
             "the full chart and guide."
@@ -567,12 +589,17 @@ BANNER_BY_SEVERITY = {"success": st.success, "warning": st.warning}
 
 def verdict_banner(ticker: str, thr: dict) -> None:
     """Plain-language "what do I do now" verdict, always from the weekly view
-    so it matches the overview table regardless of the selected bar size."""
+    so it matches the overview table regardless of the selected bar size.
+
+    The headline (from signals.current_action) always states outright
+    whether this IS a buy signal, a sell signal, or no signal at all —
+    e.g. "🟢 BUY SIGNAL — ..." — rendered as a header inside a colored
+    box so it can't be missed or misread as trader jargon.
+    """
     weekly = load_ticker_frame(ticker, "W")
     act = signals.current_action(weekly, thr)
     banner = BANNER_BY_SEVERITY.get(act["severity"], st.info)
-    emoji = act["label"].split()[0]
-    banner(f"**{emoji} {act['headline']}**\n\n{act['detail']}")
+    banner(f"### {act['headline']}\n\n{act['detail']}")
     caption_bits = []
     if act["invalidation"]:
         caption_bits.append(f"↳ This changes if: {act['invalidation']}")
@@ -586,67 +613,91 @@ def verdict_banner(ticker: str, thr: dict) -> None:
 
 
 def how_to_read_expander() -> None:
-    with st.expander("📖 How to read this — plain-language guide"):
+    with st.expander("📖 How to read this — plain-language guide (start here if you're new to investing)"):
         st.markdown(
             """
-**The one-line answer:** buy when whales are accumulating *and* the chart
-confirms it with an entry candle; take profit when whales quietly hand their
-shares to retail buyers near a top.
+**Is there a signal right now?** Look at the colored box above — it always
+states outright: **🟢 BUY SIGNAL**, **🔴 SELL SIGNAL**, or **⚪ NO SIGNAL**.
+Everything below explains how that's decided, in plain English — no prior
+trading knowledge assumed.
 
-**The five actions** (shown on the overview and in the banner above):
+---
 
-| Action | Meaning | What to do |
+**A few terms used on this page:**
+- **Candle** — one time period's price movement (a day, week, or month,
+  depending on the "Bar size" you pick), drawn as a small bar. Its color
+  shows whether price went up or down that period.
+- **Bullish** = a sign price may rise. **Bearish** = a sign price may fall.
+- **Uptrend** = price has generally been rising lately. **Downtrend** =
+  price has generally been falling lately.
+- **Trend ribbon** — a band drawn from several moving averages (a moving
+  average is just yesterday's noise smoothed out). When the ribbon gets
+  tight/"compressing," it means those averages are converging — which
+  often happens right before a bigger price move.
+- **Whale score** — our estimate (0-100) of how much big investors
+  ("whales") are buying a stock, built from free public data. 50 = neutral.
+- **Retail score** — the same idea, but estimating regular/individual
+  investor buying instead.
+
+---
+
+**The five things you might see:**
+
+| Icon | What it means | What to do |
 |---|---|---|
-| 🟢 Buy | An entry setup fired in the last 2 weeks | Consider dollar-cost averaging in — don't chase all at once |
-| 🟠 Trim | Whales look like they're selling to retail | Consider taking some profit / tightening stops |
-| 🟡 Watch | Whales accumulating, but no entry candle yet | Wait for confirmation before buying |
-| 🔵 Hold | Uptrend intact, whales still positioned | Sit tight, don't over-trade |
-| ⚪ Wait | No edge either way | Do nothing; re-check later |
+| 🟢 Buy | **This IS a buy signal** — it fired in the last 2 weeks | Consider buying gradually (a little at a time) rather than all at once |
+| 🟠 Trim | **This IS a sell signal** — big investors look like they're selling | Consider selling some of your position if you own it |
+| 🟡 Watch | **No signal yet** — but conditions may be building toward a buy | Just watch for now — don't buy on this alone |
+| 🔵 Hold | **No signal** — price trend still looks positive | If you own it, nothing here suggests selling |
+| ⚪ Wait | **No signal** — nothing stands out either way | Do nothing; check back later |
 
-**What makes a 🟢 Buy signal** (any one of these, always requiring whale
-accumulation to be rising or retail falling):
-- a strong bounce candle during a downtrend while the trend ribbon is compressing
-- the trend ribbon flipping bullish
-- a MACD golden cross
+Only 🟢 Buy and 🟠 Trim are actual signals. 🟡🔵⚪ all mean **no signal is
+active right now** — they just differ in what's happening in the background.
 
-**What makes a 🟠 Trim warning:**
-- whale accumulation falling while retail buying rises during an uptrend
-  (the classic hand-off at a top)
-- a weak candle with whales pulling back
+**What triggers a 🟢 BUY SIGNAL** (any one of these — always also requires
+the whale score to be rising):
+- price bounces back up after falling, while the trend ribbon is tight
+- the trend ribbon flips from a downtrend to an uptrend
+- a "MACD golden cross" — a sign momentum is turning upward (see Panel 4 below)
 
-**The whale score zones** (thresholds configurable per stock): below 35 =
+**What triggers a 🔴 SELL SIGNAL (Trim warning):**
+- the whale score falls while the retail score rises during an uptrend —
+  a pattern often seen near a price peak
+- a weak candle forms (price closes near its low) while the whale score is falling
+
+**The whale-score zones** (thresholds configurable per stock): below 35 =
 weak, above 35 = momentum, above 50 = rise, above 75 = soar.
 
-**Panel 1 — Price & EMA ribbon:** candlesticks with an EMA (Exponential
-Moving Average) ribbon — five moving averages of different lengths
-(8/13/21/34/55 bars) drawn together as a band.
-- Ribbon **compressing/tightening** = the averages converging, often
-  right before a breakout in either direction
-- **Blue** (bearish) = shorter averages below longer ones, downtrend
-- **Red** (bullish) = shorter averages above longer ones, uptrend
-- 🟢/🔴 triangles mark the Buy/Trim signal dates from the verdict logic
+---
 
-**Panel 3 — Whale (red) vs retail (green) accumulation:** the whale and
-retail scores explained above, plotted as bars over time with dashed
-guide lines at the momentum/rise/soar zone thresholds.
+**How to read the chart, panel by panel:**
 
-**Panel 4 — MACD (Moving Average Convergence Divergence):** a momentum
-indicator, separate from the whale/retail volume panel above it.
-- **MACD line** (blue) = fast (12-period) average price minus slow
-  (26-period) average price
-- **Signal line** (orange) = a smoothed (9-period) average of the MACD line
-- **Histogram** = the gap between the two lines — green above zero, red below
-- 🟢 **Golden cross** (MACD crosses above Signal) = momentum turning up
-- ⚪ **Death cross** (MACD crosses below Signal) = momentum turning down
+**Panel 1 — Price & trend ribbon:** candles (defined above) with the trend
+ribbon overlaid.
+- **Blue** ribbon = downtrend. **Red** ribbon = uptrend.
+- 🟢/🔴 triangles mark exactly where a buy/sell signal fired.
 
-A golden cross only feeds a 🟢 Buy verdict when whale accumulation is
-*also* rising at the same time — momentum alone never triggers Buy. The
-death cross is shown for context but doesn't currently drive a 🟠 Trim
-verdict on its own.
+**Panel 2 — Volume:** how many shares traded each period, colored to match
+the trend ribbon.
 
-⚠️ *These are proxies built from free public data (FINRA off-exchange volume,
-SEC 13F filings, volume patterns) — no feed truly labels trades as
-institutional. Weekly signals; not financial advice.*
+**Panel 3 — Whale vs retail score:** the whale score (red bars) and retail
+score (green bars) explained above, over time, with dashed lines at the
+momentum/rise/soar zone thresholds.
+
+**Panel 4 — MACD (Moving Average Convergence Divergence):** a separate
+momentum indicator (momentum = whether price is speeding up or slowing down).
+- **MACD line** (blue) and **Signal line** (orange) — when the blue line
+  crosses above the orange one, that's a **golden cross** (momentum turning
+  up); crossing below is a **death cross** (momentum turning down).
+- A golden cross only counts toward a 🟢 buy signal when the whale score is
+  *also* rising at the same time — momentum alone is never enough on its
+  own. The death cross is shown for reference but doesn't currently trigger
+  a 🟠 sell signal by itself.
+
+⚠️ *These are estimates built from free public data (FINRA off-exchange
+trading volume, SEC 13F filings, price/volume patterns) — no public data
+feed actually labels trades as coming from institutions. Signals update
+weekly. This is not financial advice.*
 """
         )
 
@@ -660,9 +711,10 @@ def detail_page(cfg):
         horizontal=True,
         index=1,
         help=(
-            "Candle size on the chart below. The Buy/Trim/Watch/Hold/Wait "
-            "verdict above always uses the Weekly view regardless of this "
-            "setting, to match the Overview tab."
+            "How much time each bar on the chart below covers: one day, "
+            "one week, or one month. The buy/sell signal above always uses "
+            "the Weekly view regardless of this setting, to match the "
+            "Overview tab."
         ),
     )
     timeframe = TIMEFRAMES[tf_label]
@@ -753,10 +805,11 @@ def detail_page(cfg):
         f"{latest['whale_score']:.1f}",
         f"{latest['whale_delta']:+.1f}",
         help=(
-            "0-100 composite estimating institutional accumulation from "
-            "FINRA dark-pool volume, SEC 13F filings, and volume-classified "
-            "price action. 50 = neutral. The delta is the change over the "
-            "last 3 weekly bars — this is what the verdict above reacts to."
+            "0-100 estimate of how much big investors (\"whales\") are "
+            "buying this stock, built from free public data (FINRA "
+            "dark-pool volume, SEC 13F filings, price/volume patterns). "
+            "50 = neutral. The small number below is how much it's changed "
+            "over the last 3 bars — this is what the signal above reacts to."
         ),
     )
     m3.metric(
@@ -765,10 +818,10 @@ def detail_page(cfg):
         f"{latest['retail_delta']:+.1f}",
         delta_color="inverse",
         help=(
-            "0-100 composite estimating retail / low-volume buying pressure "
-            "— the counterpart to the whale score. 50 = neutral. Shown "
-            "inverse-colored: a rising retail score alongside a falling "
-            "whale score is the 🟠 Trim warning pattern."
+            "0-100 estimate of regular/individual-investor buying — the "
+            "counterpart to the whale score. 50 = neutral. Colored in "
+            "reverse: a rising retail score alongside a falling whale "
+            "score is the 🔴 sell-signal pattern."
         ),
     )
     m4.metric(

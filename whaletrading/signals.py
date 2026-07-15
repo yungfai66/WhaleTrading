@@ -75,11 +75,11 @@ def evaluate(frame: pd.DataFrame) -> pd.DataFrame:
 # Plain-English translations of the internal signal reason labels, for
 # non-trader-facing UI text.
 REASON_PLAIN = {
-    "dip reversal": "a strong bounce candle appeared during the downtrend while whale accumulation was rising",
-    "ribbon turn": "the trend just flipped bullish with whale accumulation behind it",
-    "MACD cross": "momentum turned up (MACD golden cross) while whales were buying",
-    "whale→retail shift": "whales appear to be handing shares to retail buyers near the top",
-    "yellow candle": "a weak candle formed while whale accumulation was falling",
+    "dip reversal": "price bounced back up (an up candle) while it was in a downtrend and whale buying was increasing",
+    "ribbon turn": "the price trend just turned upward (bullish) while whale buying was increasing",
+    "MACD cross": "momentum turned upward (a MACD golden cross) while whale buying was increasing",
+    "whale→retail shift": "whale buying is falling while regular-investor buying is rising — a pattern often seen near a price peak",
+    "yellow candle": "a weak candle formed (price closed near its low for the period) while whale buying was falling",
 }
 
 # Verdicts ordered most-actionable-first (used to sort the overview table).
@@ -105,8 +105,8 @@ def current_action(frame: pd.DataFrame, thresholds: dict) -> dict:
             "action": "WAIT",
             "label": ACTION_LABELS["WAIT"],
             "severity": "neutral",
-            "headline": "Wait — no data",
-            "detail": "No data available for this ticker yet.",
+            "headline": "⚪ NO SIGNAL — not enough data yet",
+            "detail": "There isn't enough data for this stock yet.",
             "invalidation": "",
         }
 
@@ -115,8 +115,11 @@ def current_action(frame: pd.DataFrame, thresholds: dict) -> dict:
     whale = float(latest["whale_score"])
     delta = float(latest.get("whale_delta") or 0)
     zone = zone_label(whale, thresholds)
-    trend_word = "rising" if delta > DELTA_EPS else ("falling" if delta < -DELTA_EPS else "flat")
-    score_text = f"Whale score is {whale:.0f} ({zone} zone) and {trend_word}."
+    trend_word = "rising" if delta > DELTA_EPS else ("falling" if delta < -DELTA_EPS else "steady")
+    score_text = (
+        f"Whale score (estimated big-investor buying, 0-100) is {whale:.0f} "
+        f"— {zone} level — and {trend_word}."
+    )
 
     def _plain(reason_col: str) -> str:
         parts: list[str] = []
@@ -136,9 +139,9 @@ def current_action(frame: pd.DataFrame, thresholds: dict) -> dict:
             "action": "TRIM",
             "label": ACTION_LABELS["TRIM"],
             "severity": "warning",
-            "headline": "Trim / take profit — whales look like they're selling",
-            "detail": f"A sell warning fired {when}: {_plain('sell_reason') or 'distribution pattern'}. {score_text}",
-            "invalidation": "Reconsider if whale accumulation turns back up without the pattern repeating.",
+            "headline": "🔴 SELL SIGNAL — consider taking some profit",
+            "detail": f"A sell signal appeared {when}: {_plain('sell_reason') or 'a pattern suggesting big investors may be selling'}. {score_text}",
+            "invalidation": "This would change if whale buying turns back up without the same pattern repeating.",
         }
     if fresh_buy:
         when = "this week" if bool(frame["buy_signal"].iloc[-1]) else "last week"
@@ -146,9 +149,9 @@ def current_action(frame: pd.DataFrame, thresholds: dict) -> dict:
             "action": "BUY",
             "label": ACTION_LABELS["BUY"],
             "severity": "success",
-            "headline": "Buy setup active — consider dollar-cost averaging in",
-            "detail": f"A buy signal fired {when}: {_plain('buy_reason') or 'reversal pattern with whale support'}. {score_text}",
-            "invalidation": "Setup is invalidated if whale accumulation starts falling or price breaks below the signal candle's low.",
+            "headline": "🟢 BUY SIGNAL — consider buying gradually, not all at once",
+            "detail": f"A buy signal appeared {when}: {_plain('buy_reason') or 'a price reversal backed by rising whale buying'}. {score_text}",
+            "invalidation": "This would be undone if whale buying starts falling, or price drops back below where the signal appeared.",
         }
     if delta > DELTA_EPS and zone != "weak" and bool(
         latest.get("ribbon_tightening") or latest.get("ribbon_bearish")
@@ -157,26 +160,26 @@ def current_action(frame: pd.DataFrame, thresholds: dict) -> dict:
             "action": "WATCH",
             "label": ACTION_LABELS["WATCH"],
             "severity": "info",
-            "headline": "Setup forming — whales accumulating, no entry candle yet",
-            "detail": f"{score_text} The trend ribbon is compressing, which often precedes a move.",
-            "invalidation": "Wait for a bullish candle or MACD cross to confirm before buying.",
+            "headline": "⚪ NO SIGNAL YET — but conditions may be building toward one",
+            "detail": f"{score_text} Prices are moving into a tighter range, which sometimes comes right before a bigger move — but that's not a signal by itself.",
+            "invalidation": "Wait for an actual 🟢 buy signal before acting — this is only an early hint.",
         }
     if bool(latest.get("ribbon_bullish")) and delta > -DELTA_EPS:
         return {
             "action": "HOLD",
             "label": ACTION_LABELS["HOLD"],
             "severity": "info",
-            "headline": "Hold — uptrend intact, whales still in",
-            "detail": f"The trend ribbon is bullish and whale accumulation is holding. {score_text}",
-            "invalidation": "Watch for whale accumulation falling while retail rises — that's the trim warning.",
+            "headline": "⚪ NO SIGNAL — price trend still looks positive",
+            "detail": f"Price has generally been rising and whale buying isn't falling. {score_text} If you already own this stock, nothing here suggests selling.",
+            "invalidation": "Watch for whale buying falling while regular-investor buying rises — that's the sell-signal pattern.",
         }
     return {
         "action": "WAIT",
         "label": ACTION_LABELS["WAIT"],
         "severity": "neutral",
-        "headline": "Wait — no edge right now",
-        "detail": f"No active setup. {score_text}",
-        "invalidation": "Re-check when whale accumulation starts rising or a buy signal fires.",
+        "headline": "⚪ NO SIGNAL — nothing stands out right now",
+        "detail": f"Neither a buy nor a sell signal is active. {score_text}",
+        "invalidation": "Re-check when whale buying starts clearly rising or falling.",
     }
 
 
