@@ -646,7 +646,7 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
     # all the way down to the MACD panel to tell what date you're looking at.
     # Placed on top (rather than the panel's own bottom edge) so they don't
     # collide with the MACD panel's title sitting just below this one.
-    fig.update_xaxes(showticklabels=True, side="top", row=1, col=1)
+    fig.update_xaxes(showticklabels=True, side="top", tickfont=dict(size=9), row=1, col=1)
     fig.update_yaxes(gridcolor=C["grid"], zeroline=False)
     fig.update_yaxes(range=[0, 100], row=3, col=1)
     # The top-side date labels just added sit at the same height Plotly's
@@ -667,65 +667,65 @@ def load_freshness() -> dict:
 
 def _freshness_section(demo_mode: bool) -> None:
     """Data validity: latest data point + inherent delay + stale flag per source."""
-    st.markdown("##### 🕐 Data freshness & validity — how current is what you're seeing?")
-    fresh = load_freshness()
-    if demo_mode:
-        st.caption("Demo mode: dates below are synthetic, not real market data.")
-    today = pd.Timestamp.today().normalize()
-    rows = []
-    for key, info in SOURCE_INFO.items():
-        latest = fresh.get(key)
-        if latest is None:
-            status = "❌ no data"
-        else:
-            age = (today - pd.Timestamp(latest)).days
-            status = "✅ current" if age <= info["stale_after"] else f"⚠️ stale ({age}d old)"
-        rows.append(
-            {
-                "Source": info["name"],
-                "Latest data point": latest or "—",
-                "Inherent delay": info["delay"],
-                "Status": status,
-            }
-        )
-    st.dataframe(
-        pd.DataFrame(rows),
-        use_container_width=True,
-        hide_index=True,
-        height=_table_height(len(rows)),
-        column_config={
-            "Source": st.column_config.TextColumn(
-                "Source",
-                help=(
-                    "ATS = Alternative Trading System (a dark pool). "
-                    "FINRA = Financial Industry Regulatory Authority. "
-                    "SEC 13F = quarterly institutional-holdings filing "
-                    "with the Securities and Exchange Commission."
+    with st.expander("🕐 Data freshness & validity — how current is what you're seeing?", expanded=False):
+        fresh = load_freshness()
+        if demo_mode:
+            st.caption("Demo mode: dates below are synthetic, not real market data.")
+        today = pd.Timestamp.today().normalize()
+        rows = []
+        for key, info in SOURCE_INFO.items():
+            latest = fresh.get(key)
+            if latest is None:
+                status = "❌ no data"
+            else:
+                age = (today - pd.Timestamp(latest)).days
+                status = "✅ current" if age <= info["stale_after"] else f"⚠️ stale ({age}d old)"
+            rows.append(
+                {
+                    "Source": info["name"],
+                    "Latest data point": latest or "—",
+                    "Inherent delay": info["delay"],
+                    "Status": status,
+                }
+            )
+        st.dataframe(
+            pd.DataFrame(rows),
+            use_container_width=True,
+            hide_index=True,
+            height=_table_height(len(rows)),
+            column_config={
+                "Source": st.column_config.TextColumn(
+                    "Source",
+                    help=(
+                        "ATS = Alternative Trading System (a dark pool). "
+                        "FINRA = Financial Industry Regulatory Authority. "
+                        "SEC 13F = quarterly institutional-holdings filing "
+                        "with the Securities and Exchange Commission."
+                    ),
                 ),
-            ),
-            "Latest data point": st.column_config.TextColumn(
-                "Latest data point", help="The newest date this source's cached data covers."
-            ),
-            "Inherent delay": st.column_config.TextColumn(
-                "Inherent delay", help="How old the information is even immediately after a fresh pull — a property of the source, not this app."
-            ),
-            "Status": st.column_config.TextColumn(
-                "Status", help="✅ within the source's normal update cycle · ⚠️ older than expected, refresh recommended."
-            ),
-        },
-    )
-    st.caption(
-        "⚠️ means the cache is older than the source's normal publication "
-        "cycle — hit **Refresh data** in the left panel. \"Inherent delay\" "
-        "is how old the information is even right after a refresh: prices "
-        "and dark-pool volume describe **yesterday/today**, weekly ATS "
-        "(Alternative Trading System) describes **2–4 weeks ago**, and 13F "
-        "(SEC Form 13F, quarterly institutional-holdings filing) holdings "
-        "describe **last quarter**. Signals weight the fast sources most, "
-        "and 13F least. FINRA = Financial Industry Regulatory Authority "
-        "(publishes the dark-pool data); SEC = Securities and Exchange "
-        "Commission (publishes 13F)."
-    )
+                "Latest data point": st.column_config.TextColumn(
+                    "Latest data point", help="The newest date this source's cached data covers."
+                ),
+                "Inherent delay": st.column_config.TextColumn(
+                    "Inherent delay", help="How old the information is even immediately after a fresh pull — a property of the source, not this app."
+                ),
+                "Status": st.column_config.TextColumn(
+                    "Status", help="✅ within the source's normal update cycle · ⚠️ older than expected, refresh recommended."
+                ),
+            },
+        )
+        st.caption(
+            "⚠️ means the cache is older than the source's normal publication "
+            "cycle — hit **Refresh data** in the left panel. \"Inherent delay\" "
+            "is how old the information is even right after a refresh: prices "
+            "and dark-pool volume describe **yesterday/today**, weekly ATS "
+            "(Alternative Trading System) describes **2–4 weeks ago**, and 13F "
+            "(SEC Form 13F, quarterly institutional-holdings filing) holdings "
+            "describe **last quarter**. Signals weight the fast sources most, "
+            "and 13F least. FINRA = Financial Industry Regulatory Authority "
+            "(publishes the dark-pool data); SEC = Securities and Exchange "
+            "Commission (publishes 13F)."
+        )
 
 
 def _watchlist_edit_ui(cfg, working: list[str], pinned: set[str]) -> None:
@@ -825,7 +825,7 @@ def _watchlist_edit_ui(cfg, working: list[str], pinned: set[str]) -> None:
 # the chart-link column aren't sortable (no dataframe field), so they render
 # as plain labels rather than clickable header buttons.
 TABLE_COLUMNS = [
-    ("pin", "📌", "Pinned in Edit mode — stays sorted to the top.", None),
+    ("pin", "📌", "Pinned in Edit mode — always sorted to the top, regardless of other sorting. Click to sort.", "_pinned"),
     ("ticker", "Ticker", "The stock symbol. Click to sort.", "Ticker"),
     ("company", "Company", "Company / issuer name. Click to sort.", "Company"),
     ("action", "Action", "🟢 Buy · 🟠 Trim · 🟡 Watch · 🔵 Hold · ⚪ Wait — see legend above. Click to sort.", "_sort"),
@@ -888,7 +888,12 @@ def overview_page(cfg):
         if sort_state:
             col_key, asc = sort_state
             sort_field = next(f for k, _, _, f in TABLE_COLUMNS if k == col_key)
-            display = ok.sort_values(sort_field, ascending=asc, na_position="last").reset_index(drop=True)
+            # Pinned rows stay on top no matter which column is sorted (even
+            # when that column is Pin itself) — same _pinned-first tiebreak
+            # the default branch below already uses.
+            display = ok.sort_values(
+                ["_pinned", sort_field], ascending=[False, asc], na_position="last"
+            ).reset_index(drop=True)
         else:
             display = ok.sort_values(
                 ["_pinned", "_sort", "Whale %"], ascending=[False, True, False]
@@ -1283,14 +1288,21 @@ def main():
         st.caption(f"Last refresh: {_format_singapore(last)}")
         st.divider()
 
+        # Collect a page switch and apply st.rerun() only after every widget
+        # in this loop (including the Ticker selectbox below) has rendered
+        # for this run. Streamlit drops a keyed widget's session_state entry
+        # for any run that doesn't instantiate it — calling st.rerun() early
+        # (e.g. right inside the button's own branch) would abort the script
+        # before the selectbox below ever renders, silently resetting
+        # detail_ticker back to the first ticker on the next run.
+        pending_page = None
         for key, label in PAGES.items():
             active = st.session_state["current_page"] == key
             if st.button(
                 label, key=f"nav_{key}", use_container_width=True,
                 type="primary" if active else "secondary",
             ):
-                st.session_state["current_page"] = key
-                st.rerun()
+                pending_page = key
             if key == "detail" and working:
                 if st.session_state.get("detail_ticker") not in working:
                     st.session_state["detail_ticker"] = working[0]
@@ -1304,6 +1316,9 @@ def main():
                         key="bar_size_label", label_visibility="collapsed",
                         help="How much time each bar on the chart covers. The buy/sell verdict always uses Weekly, regardless of this setting.",
                     )
+        if pending_page:
+            st.session_state["current_page"] = pending_page
+            st.rerun()
 
     st.markdown("### 🐋 WhaleTrading")
     st.caption(
