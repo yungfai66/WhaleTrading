@@ -351,7 +351,7 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
                 y=frame[col],
                 mode="lines",
                 line=dict(color=color, width=1),
-                name="Trend ribbon (5 EMAs, dark→light = short→long)",
+                name="Trend ribbon (EMAs)",
                 legendgroup="ribbon",
                 hoverinfo="skip",
                 showlegend=(i == 0),
@@ -365,7 +365,7 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
             y=frame["close"],
             mode="lines",
             line=dict(color=C["price_line"], width=1.6),
-            name="Close price (line)",
+            name="Close price",
             opacity=0.9,
             hoverinfo="skip",
         ),
@@ -379,7 +379,7 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
             high=frame["high"],
             low=frame["low"],
             close=frame["close"],
-            name="Candle (open/high/low/close)",
+            name="Candle",
             increasing_line_color=C["up"],
             increasing_fillcolor=C["up"],
             decreasing_line_color=C["down"],
@@ -435,6 +435,23 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
         row=4,
         col=1,
     )
+    # The bar itself is one trace colored per-point, so it can't produce
+    # per-color legend entries on its own — add 3 invisible marker traces
+    # just to give this panel's legend real swatches for what the colors mean.
+    for label, color in (("Uptrend", C["whale"]), ("Downtrend", C["blue"]), ("Mixed", C["neutral"])):
+        fig.add_trace(
+            go.Scatter(
+                x=[frame.index[0]],
+                y=[None],
+                mode="markers",
+                marker=dict(symbol="square", size=9, color=color),
+                name=label,
+                legend="legend4",
+                hoverinfo="skip",
+            ),
+            row=4,
+            col=1,
+        )
 
     # ── Panel 3: whale vs retail bars + threshold guides ────────────────
     fig.add_trace(
@@ -443,6 +460,7 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
             y=frame["whale_score"],
             marker_color=C["whale"],
             name="Whale accumulation",
+            legend="legend3",
             hovertemplate="%{x|%Y-%m-%d}<br>whale %{y:.1f}<extra></extra>",
         ),
         row=3,
@@ -454,6 +472,7 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
             y=frame["retail_score"],
             marker_color=C["retail"],
             name="Retail accumulation",
+            legend="legend3",
             hovertemplate="%{x|%Y-%m-%d}<br>retail %{y:.1f}<extra></extra>",
         ),
         row=3,
@@ -487,6 +506,7 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
         go.Scatter(
             x=frame.index, y=frame["macd"], mode="lines",
             line=dict(color=C["blue"], width=2), name="MACD",
+            legend="legend2",
         ),
         row=2,
         col=1,
@@ -495,6 +515,7 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
         go.Scatter(
             x=frame.index, y=frame["macd_signal"], mode="lines",
             line=dict(color=C["orange"], width=2), name="Signal",
+            legend="legend2",
         ),
         row=2,
         col=1,
@@ -507,6 +528,7 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
             marker=dict(symbol="triangle-up", size=9, color=C["buy"],
                         line=dict(color=C["surface"], width=1)),
             name="Golden cross",
+            legend="legend2",
             hovertemplate="Golden cross %{x|%Y-%m-%d}<br>momentum turning up<extra></extra>",
         ),
         row=2,
@@ -518,6 +540,7 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
             marker=dict(symbol="triangle-down", size=9, color=C["muted"],
                         line=dict(color=C["surface"], width=1)),
             name="Death cross",
+            legend="legend2",
             hovertemplate="Death cross %{x|%Y-%m-%d}<br>momentum turning down (not wired to a verdict)<extra></extra>",
         ),
         row=2,
@@ -543,6 +566,14 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
             col=1,
         )
 
+    # Each panel gets its own small legend, anchored just outside the right
+    # edge at that panel's own row height (row y-domains are fixed by the
+    # row_heights/vertical_spacing above — computed once and hardcoded here
+    # rather than looked up, since those inputs never change at runtime).
+    legend_style = dict(
+        orientation="v", xanchor="left", yanchor="top", x=1.01,
+        font=dict(size=9), bgcolor=C["surface"], bordercolor=C["grid"], borderwidth=1,
+    )
     fig.update_layout(
         height=980,
         barmode="group",
@@ -551,8 +582,11 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
         plot_bgcolor=C["surface"],
         font=dict(color=C["ink2"], family='system-ui, -apple-system, "Segoe UI", sans-serif'),
         hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.03, x=0, font=dict(size=10)),
-        margin=dict(l=40, r=20, t=90, b=30),
+        legend=dict(y=1.0, **legend_style),
+        legend2=dict(y=0.5675, **legend_style),
+        legend3=dict(y=0.3645, **legend_style),
+        legend4=dict(y=0.102, **legend_style),
+        margin=dict(l=40, r=150, t=68, b=30),
         xaxis_rangeslider_visible=False,
     )
     # Quarterly gridlines/ticks (Jan/Apr/Jul/Oct 1st), regardless of the
@@ -562,9 +596,16 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
     # shared_xaxes hides date labels on every row but the bottom one by
     # default — show them on the price panel too so you don't have to look
     # all the way down to the MACD panel to tell what date you're looking at.
-    fig.update_xaxes(showticklabels=True, row=1, col=1)
+    # Placed on top (rather than the panel's own bottom edge) so they don't
+    # collide with the MACD panel's title sitting just below this one.
+    fig.update_xaxes(showticklabels=True, side="top", row=1, col=1)
     fig.update_yaxes(gridcolor=C["grid"], zeroline=False)
     fig.update_yaxes(range=[0, 100], row=3, col=1)
+    # The top-side date labels just added sit at the same height Plotly's
+    # automatic subplot-title annotation uses by default — nudge panel 1's
+    # title (always the first of the 4 subplot_titles annotations) further
+    # up so the two don't overlap.
+    fig.layout.annotations[0].update(yshift=18)
     return fig
 
 
@@ -1184,13 +1225,23 @@ def main():
         # visible together, on both pages — so you can line up the next
         # stock's chart while still looking at the Overview table, then flip
         # the toggle, instead of hunting for these controls inside the page.
-        nav_col, tk_col, bs_col = st.columns([1.5, 1.2, 1.5], gap="small")
+        nav_col, tk_col, bs_col = st.columns([1.2, 2, 1.1], gap="small")
         view = nav_col.radio(
             "View", NAV_OPTIONS, horizontal=True, key="nav_view", label_visibility="collapsed"
         )
         if st.session_state.get("detail_ticker") not in working:
             st.session_state["detail_ticker"] = working[0]
-        ticker = tk_col.selectbox("Ticker", working, key="detail_ticker", label_visibility="collapsed")
+
+        def _ticker_option(t: str) -> str:
+            if cfg.demo_mode:
+                return t
+            name = load_company_name(t)
+            return f"{t} — {name}" if name else t
+
+        ticker = tk_col.selectbox(
+            "Ticker", working, key="detail_ticker", label_visibility="collapsed",
+            format_func=_ticker_option,
+        )
         tf_label = bs_col.radio(
             "Bar size",
             list(TIMEFRAMES),
