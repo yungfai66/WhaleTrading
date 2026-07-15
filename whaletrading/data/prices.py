@@ -48,6 +48,22 @@ def resample(daily: pd.DataFrame, timeframe: str) -> pd.DataFrame:
     return out.dropna(subset=["close"])
 
 
+def fetch_quote(ticker: str) -> float | None:
+    """Best-effort current quote (Yahoo's public feed, ~15 min delayed).
+
+    Distinct from fetch_daily()'s end-of-day bar: this can reflect today's
+    price even mid-session, before the daily bar finalizes at the close.
+    Returns None on any failure so callers can fall back to the daily close.
+    """
+    try:
+        fast_info = yf.Ticker(ticker).fast_info
+        price = fast_info.get("last_price") if hasattr(fast_info, "get") else fast_info["last_price"]
+        return float(price) if price else None
+    except Exception as exc:
+        log.warning("yfinance quote failed for %s: %s", ticker, exc)
+        return None
+
+
 def company_name(ticker: str) -> str | None:
     """Best-effort issuer name (used to match 13F holdings without an alias)."""
     try:

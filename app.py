@@ -84,6 +84,15 @@ RANGE_PRESETS = {
 }
 DEFAULT_RANGE = {"D": "1Y", "W": "2Y", "M": "All"}
 
+NAV_OPTIONS = ["📊 Overview", "📈 Ticker detail"]
+
+
+def _table_height(n_rows: int) -> int:
+    """Fit every row without the dataframe's own internal scrollbar — the
+    page scrolls instead, avoiding a scrollbar nested inside a scrollbar."""
+    return 38 + 35 * max(n_rows, 1) + 3
+
+
 st.set_page_config(page_title="WhaleTrading", page_icon="🐋", layout="wide")
 
 
@@ -103,6 +112,24 @@ def bootstrap_data(_cfg) -> bool:
         return False
     refresh_all(_cfg)
     return True
+
+
+@st.cache_data(ttl=60)
+def load_quote(ticker: str) -> float | None:
+    """Short-TTL cache (60s) so this stays meaningfully "current", separate
+    from the 5-minute cache on the daily-bar data used for charting."""
+    return prices_mod.fetch_quote(ticker)
+
+
+@st.cache_data(ttl=300)
+def load_latest_daily(ticker: str) -> pd.Series | None:
+    """The single most recent completed daily bar, independent of whatever
+    bar-size (D/W/M) the user has selected for the chart — fixes "Close"
+    looking stale when Weekly/Monthly bars are selected."""
+    conn = store.connect()
+    daily = store.load_prices(conn, ticker)
+    conn.close()
+    return daily.iloc[-1] if not daily.empty else None
 
 
 @st.cache_data(ttl=300)
@@ -333,6 +360,30 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
         row=4,
         col=1,
     )
+    golden = frame[frame["macd_golden_cross"]]
+    death = frame[frame["macd_death_cross"]]
+    fig.add_trace(
+        go.Scatter(
+            x=golden.index, y=golden["macd"], mode="markers",
+            marker=dict(symbol="triangle-up", size=9, color=C["buy"],
+                        line=dict(color=C["surface"], width=1)),
+            name="Golden cross",
+            hovertemplate="Golden cross %{x|%Y-%m-%d}<br>momentum turning up<extra></extra>",
+        ),
+        row=4,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=death.index, y=death["macd"], mode="markers",
+            marker=dict(symbol="triangle-down", size=9, color=C["muted"],
+                        line=dict(color=C["surface"], width=1)),
+            name="Death cross",
+            hovertemplate="Death cross %{x|%Y-%m-%d}<br>momentum turning down (not wired to a verdict)<extra></extra>",
+        ),
+        row=4,
+        col=1,
+    )
 
     fig.update_layout(
         height=920,
@@ -383,14 +434,43 @@ def freshness_panel(demo_mode: bool) -> None:
                     "Status": status,
                 }
             )
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.dataframe(
+            pd.DataFrame(rows),
+            use_container_width=True,
+            hide_index=True,
+            height=_table_height(len(rows)),
+            column_config={
+                "Source": st.column_config.TextColumn(
+                    "Source",
+                    help=(
+                        "ATS = Alternative Trading System (a dark pool). "
+                        "FINRA = Financial Industry Regulatory Authority. "
+                        "SEC 13F = quarterly institutional-holdings filing "
+                        "with the Securities and Exchange Commission."
+                    ),
+                ),
+                "Latest data point": st.column_config.TextColumn(
+                    "Latest data point", help="The newest date this source's cached data covers."
+                ),
+                "Inherent delay": st.column_config.TextColumn(
+                    "Inherent delay", help="How old the information is even immediately after a fresh pull — a property of the source, not this app."
+                ),
+                "Status": st.column_config.TextColumn(
+                    "Status", help="✅ within the source's normal update cycle · ⚠️ older than expected, refresh recommended."
+                ),
+            },
+        )
         st.caption(
             "⚠️ means the cache is older than the source's normal publication "
             "cycle — hit **Refresh data now** in the sidebar. \"Inherent delay\" "
             "is how old the information is even right after a refresh: prices "
             "and dark-pool volume describe **yesterday/today**, weekly ATS "
-            "describes **2–4 weeks ago**, and 13F holdings describe **last "
-            "quarter**. Signals weight the fast sources most, and 13F least."
+            "(Alternative Trading System) describes **2–4 weeks ago**, and 13F "
+            "(SEC Form 13F, quarterly institutional-holdings filing) holdings "
+            "describe **last quarter**. Signals weight the fast sources most, "
+            "and 13F least. FINRA = Financial Industry Regulatory Authority "
+            "(publishes the dark-pool data); SEC = Securities and Exchange "
+            "Commission (publishes 13F)."
         )
 
 
@@ -411,24 +491,68 @@ def overview_page(cfg):
 
         display = ok.sort_values(
             ["_sort", "Whale %"], ascending=[True, False]
-        ).drop(columns=["Status", "_sort", "_fresh_msg", "_severity"])
-        st.dataframe(
+        ).drop(columns=["Status", "_sort", "_fresh_msg", "_severity"]).reset_index(drop=True)
+        st.caption("💡 Click a row to open that stock's chart.")
+        event = st.dataframe(
             display,
             use_container_width=True,
             hide_index=True,
+            height=_table_height(len(display)),
+            on_select="rerun",
+            selection_mode="single-row",
             column_config={
+                "Ticker": st.column_config.TextColumn(
+                    "Ticker", help="Click anywhere on a row to open that stock's full chart on the Ticker detail page."
+                ),
+                "Action": st.column_config.TextColumn(
+                    "Action",
+                    help=(
+                        "🟢 Buy = entry setup fired · 🟠 Trim = whales may be "
+                        "selling · 🟡 Watch = accumulating, no entry candle yet · "
+                        "🔵 Hold = uptrend intact · ⚪ Wait = no edge right now"
+                    ),
+                ),
+                "Close": st.column_config.NumberColumn(
+                    "Close",
+                    help="Last COMPLETED daily close (not a live intraday quote — see the ticker detail page for a delayed live quote where available).",
+                ),
                 "Whale %": st.column_config.ProgressColumn(
-                    "Whale %", min_value=0, max_value=100, format="%.1f"
+                    "Whale %",
+                    min_value=0,
+                    max_value=100,
+                    format="%.1f",
+                    help=(
+                        "Composite 0-100 score estimating institutional "
+                        "accumulation (FINRA dark-pool volume + SEC 13F filings "
+                        "+ volume-classified price action). 50 = neutral."
+                    ),
+                ),
+                "Δ 20d": st.column_config.NumberColumn(
+                    "Δ 20d",
+                    help="Change in whale score over the last ~20 trading days. Positive = accumulation increasing.",
+                ),
+                "Retail %": st.column_config.NumberColumn(
+                    "Retail %",
+                    help="Composite 0-100 score estimating retail / low-volume buying pressure. 50 = neutral.",
+                ),
+                "Zone": st.column_config.TextColumn(
+                    "Zone",
+                    help="Whale-score threshold band: weak <35 · momentum 35-50 · rise 50-75 · soar >75 (per-ticker configurable).",
                 ),
             },
         )
+        clicked_rows = (event.get("selection") or {}).get("rows") if event else None
+        if clicked_rows:
+            go_to_ticker(display.iloc[clicked_rows[0]]["Ticker"])
         st.caption(
-            "**Action guide:** 🟢 Buy = entry setup fired, consider DCA · "
+            "**Action guide:** 🟢 Buy = entry setup fired, consider DCA "
+            "(Dollar-Cost Averaging) in · "
             "🟠 Trim = whales look like they're selling, consider taking profit · "
             "🟡 Watch = whales accumulating, wait for the entry candle · "
             "🔵 Hold = uptrend intact · ⚪ Wait = no edge. "
             "Zones: momentum >35, rise >50, soar >75 (per-ticker configurable). "
-            "Open a stock's page (Ticker detail tab) for the full explanation."
+            "Hover any column header above for details, or click a row for "
+            "the full chart and guide."
         )
     if not missing.empty:
         st.warning(
@@ -493,6 +617,33 @@ accumulation to be rising or retail falling):
 **The whale score zones** (thresholds configurable per stock): below 35 =
 weak, above 35 = momentum, above 50 = rise, above 75 = soar.
 
+**Panel 1 — Price & EMA ribbon:** candlesticks with an EMA (Exponential
+Moving Average) ribbon — five moving averages of different lengths
+(8/13/21/34/55 bars) drawn together as a band.
+- Ribbon **compressing/tightening** = the averages converging, often
+  right before a breakout in either direction
+- **Blue** (bearish) = shorter averages below longer ones, downtrend
+- **Red** (bullish) = shorter averages above longer ones, uptrend
+- 🟢/🔴 triangles mark the Buy/Trim signal dates from the verdict logic
+
+**Panel 3 — Whale (red) vs retail (green) accumulation:** the whale and
+retail scores explained above, plotted as bars over time with dashed
+guide lines at the momentum/rise/soar zone thresholds.
+
+**Panel 4 — MACD (Moving Average Convergence Divergence):** a momentum
+indicator, separate from the whale/retail volume panel above it.
+- **MACD line** (blue) = fast (12-period) average price minus slow
+  (26-period) average price
+- **Signal line** (orange) = a smoothed (9-period) average of the MACD line
+- **Histogram** = the gap between the two lines — green above zero, red below
+- 🟢 **Golden cross** (MACD crosses above Signal) = momentum turning up
+- ⚪ **Death cross** (MACD crosses below Signal) = momentum turning down
+
+A golden cross only feeds a 🟢 Buy verdict when whale accumulation is
+*also* rising at the same time — momentum alone never triggers Buy. The
+death cross is shown for context but doesn't currently drive a 🟠 Trim
+verdict on its own.
+
 ⚠️ *These are proxies built from free public data (FINRA off-exchange volume,
 SEC 13F filings, volume patterns) — no feed truly labels trades as
 institutional. Weekly signals; not financial advice.*
@@ -502,8 +653,18 @@ institutional. Weekly signals; not financial advice.*
 
 def detail_page(cfg):
     col1, col2 = st.columns([2, 1])
-    ticker = col1.selectbox("Ticker", cfg.watchlist)
-    tf_label = col2.radio("Bar size", list(TIMEFRAMES), horizontal=True, index=1)
+    ticker = col1.selectbox("Ticker", cfg.watchlist, key="detail_ticker")
+    tf_label = col2.radio(
+        "Bar size",
+        list(TIMEFRAMES),
+        horizontal=True,
+        index=1,
+        help=(
+            "Candle size on the chart below. The Buy/Trim/Watch/Hold/Wait "
+            "verdict above always uses the Weekly view regardless of this "
+            "setting, to match the Overview tab."
+        ),
+    )
     timeframe = TIMEFRAMES[tf_label]
 
     verdict_banner(ticker, cfg.thresholds_for(ticker))
@@ -522,7 +683,12 @@ def detail_page(cfg):
     range_labels = list(RANGE_PRESETS) + ["Custom"]
     default_idx = range_labels.index(DEFAULT_RANGE[timeframe])
     range_label = st.radio(
-        "Time range", range_labels, horizontal=True, index=default_idx, key=f"range_{ticker}"
+        "Time range",
+        range_labels,
+        horizontal=True,
+        index=default_idx,
+        key=f"range_{ticker}",
+        help="How far back the chart displays. This only changes the view — it doesn't affect the verdict above.",
     )
     if range_label == "Custom":
         c1, c2 = st.columns(2)
@@ -542,12 +708,74 @@ def detail_page(cfg):
 
     latest = frame.iloc[-1]
     zone = signals.zone_label(float(latest["whale_score"]), thr)
+
+    # Bug fix: this used to read latest['close'] off `frame`, which is
+    # resampled to whatever Bar size is selected above — so on Weekly/Monthly
+    # it showed last Friday's/last month's close and looked "stuck" even
+    # right after a refresh. Always show the true latest daily close instead,
+    # independent of the chart's bar size, plus a best-effort live quote.
+    latest_daily = load_latest_daily(ticker)
+    quote = None if cfg.demo_mode else load_quote(ticker)
+
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Close", f"{latest['close']:,.2f}")
-    m2.metric("Whale score", f"{latest['whale_score']:.1f}", f"{latest['whale_delta']:+.1f}")
-    m3.metric("Retail score", f"{latest['retail_score']:.1f}", f"{latest['retail_delta']:+.1f}",
-              delta_color="inverse")
-    m4.metric("Zone", zone)
+    if quote is not None:
+        day_close = float(latest_daily["close"]) if latest_daily is not None else None
+        m1.metric(
+            "Price (delayed quote)",
+            f"{quote:,.2f}",
+            f"{quote - day_close:+.2f} vs last close" if day_close is not None else None,
+            help=(
+                "Yahoo Finance quote, ~15 min delayed — can reflect today's "
+                "price even before the daily bar finalizes."
+                + (
+                    f" Last COMPLETED daily close was {day_close:,.2f} on "
+                    f"{latest_daily.name:%Y-%m-%d}."
+                    if day_close is not None
+                    else ""
+                )
+            ),
+        )
+    elif latest_daily is not None:
+        m1.metric(
+            f"Close ({latest_daily.name:%Y-%m-%d})",
+            f"{float(latest_daily['close']):,.2f}",
+            help=(
+                "Last COMPLETED daily close — independent of the Bar size "
+                "selected above, so this won't look stuck on an old weekly/"
+                "monthly bar. A live delayed quote isn't available "
+                + ("in demo mode." if cfg.demo_mode else "right now.")
+            ),
+        )
+    else:
+        m1.metric("Close", f"{latest['close']:,.2f}", help="Last close on the selected bar size.")
+    m2.metric(
+        "Whale score",
+        f"{latest['whale_score']:.1f}",
+        f"{latest['whale_delta']:+.1f}",
+        help=(
+            "0-100 composite estimating institutional accumulation from "
+            "FINRA dark-pool volume, SEC 13F filings, and volume-classified "
+            "price action. 50 = neutral. The delta is the change over the "
+            "last 3 weekly bars — this is what the verdict above reacts to."
+        ),
+    )
+    m3.metric(
+        "Retail score",
+        f"{latest['retail_score']:.1f}",
+        f"{latest['retail_delta']:+.1f}",
+        delta_color="inverse",
+        help=(
+            "0-100 composite estimating retail / low-volume buying pressure "
+            "— the counterpart to the whale score. 50 = neutral. Shown "
+            "inverse-colored: a rising retail score alongside a falling "
+            "whale score is the 🟠 Trim warning pattern."
+        ),
+    )
+    m4.metric(
+        "Zone",
+        zone,
+        help="Whale-score threshold band: weak <35 · momentum 35-50 · rise 50-75 · soar >75 (per-ticker configurable in config/watchlist.yaml).",
+    )
 
     st.plotly_chart(
         four_panel_figure(frame, ticker, thr),
@@ -581,16 +809,39 @@ def detail_page(cfg):
         )
 
 
+def go_to_ticker(ticker: str) -> None:
+    """Jump the Overview table's row-click straight to that stock's chart.
+
+    st.tabs can't be switched from code, so navigation uses a top-level
+    st.radio (still always visible, unlike the sidebar which auto-collapses
+    on narrow embeds) bound to session_state — but a widget's session_state
+    key can't be reassigned after that widget has already been instantiated
+    in the same run. So we stash the request and apply it at the very top
+    of the next run, before the radio/selectbox widgets are created.
+    """
+    st.session_state["pending_nav"] = (NAV_OPTIONS[1], ticker)
+    st.rerun()
+
+
 def main():
     cfg = get_config()
+    st.session_state.setdefault("nav_view", NAV_OPTIONS[0])
+    st.session_state.setdefault("detail_ticker", cfg.watchlist[0])
+    pending = st.session_state.pop("pending_nav", None)
+    if pending:
+        st.session_state["nav_view"], st.session_state["detail_ticker"] = pending
+
     with st.spinner("First run — fetching data (FINRA / EDGAR / prices)…"):
         bootstrap_data(cfg)
 
     st.title("🐋 WhaleTrading")
     st.caption(
         "Institutional (whale) accumulation tracker built entirely on free data: "
-        "FINRA off-exchange volume, SEC 13F filings, and volume-classified OHLCV. "
-        "Scores are proxies — no public feed labels trades as institutional."
+        "FINRA off-exchange volume, SEC 13F (institutional-holdings) filings, and "
+        "volume-classified OHLCV (price & volume) data. "
+        "Scores are proxies — no public feed labels trades as institutional. "
+        "See the 🕐 Data freshness panel below and the 📖 How to read this guide "
+        "on each stock's page for full definitions."
     )
     if cfg.demo_mode:
         st.info("Demo mode: synthetic data (WHALETRADING_DEMO=1). Unset it for live data.")
@@ -601,7 +852,16 @@ def main():
         last = store.get_meta(conn, "last_refresh:pipeline")
         conn.close()
         st.write(f"Last refresh: {last[:16].replace('T', ' ') if last else 'never'} UTC")
-        if st.button("Refresh data now", type="primary"):
+        if st.button(
+            "Refresh data now",
+            type="primary",
+            help=(
+                "Re-fetches FINRA (dark-pool volume), SEC EDGAR (13F holdings), "
+                "and Yahoo Finance (prices) for every watchlist ticker, then "
+                "recomputes whale/retail scores. First run can take a few "
+                "minutes; later refreshes are incremental."
+            ),
+        ):
             with st.spinner("Fetching FINRA / EDGAR / prices…"):
                 summary = refresh_all(cfg)
             failed = summary.get("sources_failed", [])
@@ -615,13 +875,18 @@ def main():
             "weights, and tracked 13F managers."
         )
 
-    # Top-level tabs, not sidebar nav: the sidebar auto-collapses on narrow
-    # embeds (e.g. Streamlit Community Cloud), which was hiding "Ticker
-    # detail" entirely. Tabs stay visible regardless of sidebar state.
-    tab_overview, tab_detail = st.tabs(["📊 Overview", "📈 Ticker detail"])
-    with tab_overview:
+    # Top-level radio, not sidebar nav or st.tabs: the sidebar auto-collapses
+    # on narrow embeds (e.g. Streamlit Community Cloud), which was hiding
+    # "Ticker detail" entirely — a radio here stays visible regardless of
+    # sidebar state, same as tabs did, but (unlike tabs) can be switched
+    # programmatically so clicking an Overview row can jump straight to it.
+    view = st.radio(
+        "View", NAV_OPTIONS, horizontal=True, key="nav_view", label_visibility="collapsed"
+    )
+    st.divider()
+    if view == NAV_OPTIONS[0]:
         overview_page(cfg)
-    with tab_detail:
+    else:
         detail_page(cfg)
 
 
