@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -133,10 +133,20 @@ st.set_page_config(page_title="WhaleTrading", page_icon="🐋", layout="wide")
 st.markdown(
     """
     <style>
-    [data-testid="stSidebar"] { width: 190px !important; min-width: 190px !important; }
-    [data-testid="stSidebar"] > div:first-child { width: 190px !important; }
-    .block-container { padding-top: 2rem !important; }
-    hr { margin: 0.6rem 0 !important; }
+    /* Streamlit's fixed header is ~60px (3.75rem) tall with a high z-index —
+       padding-top must clear it or content underneath gets visually hidden
+       behind it (looks broken: e.g. a button's colored fill shows but its
+       text doesn't, since the text sits under the opaque header layer). */
+    .block-container { padding-top: 4rem !important; padding-bottom: 1.5rem !important; }
+    hr { margin: 0.4rem 0 !important; }
+    [data-testid="stAlert"] { padding: 0.5rem 0.9rem !important; margin-bottom: 0.4rem !important; }
+    [data-testid="stExpander"] { margin-bottom: 0.4rem !important; }
+    [data-testid="stCaptionContainer"] p { margin-bottom: 0 !important; }
+    div[data-testid="stMarkdownContainer"] > p { margin-bottom: 0.3rem !important; }
+    h1, h2, h3 { margin-top: 0.2rem !important; margin-bottom: 0.3rem !important; }
+    div[data-testid="stRadio"] > label { margin-bottom: 0.1rem !important; }
+    div[data-testid="stRadio"] div[role="radiogroup"] { gap: 0.4rem !important; }
+    .stButton button { padding: 0.25rem 0.75rem !important; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -159,6 +169,30 @@ def bootstrap_data(_cfg) -> bool:
         return False
     refresh_all(_cfg)
     return True
+
+
+# How stale the cache must be (minutes since last pipeline refresh) before a
+# new page load/reload triggers an automatic refresh. Session-scoped (not
+# st.cache_resource), so it fires once per browser session/reload rather than
+# once per container lifetime — without this a re-opened tab could sit on a
+# refresh from hours ago until someone remembers to click the button.
+AUTO_REFRESH_STALE_MINUTES = 30
+
+
+def auto_refresh_if_stale(cfg) -> None:
+    if st.session_state.get("_auto_refresh_done"):
+        return
+    st.session_state["_auto_refresh_done"] = True
+    conn = store.connect()
+    last = store.get_meta(conn, "last_refresh:pipeline")
+    conn.close()
+    if last:
+        age_min = (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds() / 60
+        if age_min < AUTO_REFRESH_STALE_MINUTES:
+            return
+    with st.spinner("Refreshing data…"):
+        refresh_all(cfg, tickers=get_working_watchlist(cfg))
+    st.cache_data.clear()
 
 
 @st.cache_data(ttl=60)
@@ -255,7 +289,7 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
         rows=4,
         cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.03,
+        vertical_spacing=0.05,
         row_heights=[0.45, 0.12, 0.25, 0.18],
         subplot_titles=(
             "Price · EMA ribbon · signals",
@@ -265,7 +299,39 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
         ),
     )
 
-    # ── Panel 1: candles + EMA ribbon + signal markers ──────────────────
+    # ── Panel 1: candles + EMA ribbon + close price + signal markers ────
+    # Ribbon lines drawn first (bottom layer), then the close-price line in a
+    # single bold, unmistakable color (so it's never confused with the 5
+    # thinner ribbon lines), then candles on top so their wicks stay visible.
+    ema_cols = [c for c in frame.columns if c.startswith("ema_")]
+    for i, (color, col) in enumerate(zip(RIBBON_STEPS, ema_cols)):
+        fig.add_trace(
+            go.Scatter(
+                x=frame.index,
+                y=frame[col],
+                mode="lines",
+                line=dict(color=color, width=1),
+                name="Trend ribbon (5 EMAs, dark→light = short→long)",
+                legendgroup="ribbon",
+                hoverinfo="skip",
+                showlegend=(i == 0),
+            ),
+            row=1,
+            col=1,
+        )
+    fig.add_trace(
+        go.Scatter(
+            x=frame.index,
+            y=frame["close"],
+            mode="lines",
+            line=dict(color=C["violet"], width=1.6),
+            name="Close price (line)",
+            opacity=0.9,
+            hoverinfo="skip",
+        ),
+        row=1,
+        col=1,
+    )
     fig.add_trace(
         go.Candlestick(
             x=frame.index,
@@ -273,31 +339,15 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
             high=frame["high"],
             low=frame["low"],
             close=frame["close"],
-            name="Price",
+            name="Candle (open/high/low/close)",
             increasing_line_color=C["up"],
             increasing_fillcolor=C["up"],
             decreasing_line_color=C["down"],
             decreasing_fillcolor=C["down"],
-            showlegend=False,
         ),
         row=1,
         col=1,
     )
-    ema_cols = [c for c in frame.columns if c.startswith("ema_")]
-    for color, col in zip(RIBBON_STEPS, ema_cols):
-        fig.add_trace(
-            go.Scatter(
-                x=frame.index,
-                y=frame[col],
-                mode="lines",
-                line=dict(color=color, width=1),
-                name=col.upper().replace("_", " "),
-                hoverinfo="skip",
-                showlegend=False,
-            ),
-            row=1,
-            col=1,
-        )
     buys = frame[frame["buy_signal"]]
     sells = frame[frame["sell_signal"]]
     fig.add_trace(
@@ -434,16 +484,35 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
         col=1,
     )
 
+    # A bordered box around each panel makes it unambiguous which title (e.g.
+    # "MACD") belongs to which chart below it, especially once the shared
+    # legend above pushes things closer together.
+    for r in range(1, 5):
+        fig.add_shape(
+            type="rect",
+            xref="x domain",
+            yref="y domain",
+            x0=0,
+            x1=1,
+            y0=0,
+            y1=1,
+            line=dict(color=C["grid"], width=1.3),
+            fillcolor="rgba(0,0,0,0)",
+            layer="below",
+            row=r,
+            col=1,
+        )
+
     fig.update_layout(
-        height=920,
+        height=980,
         barmode="group",
         bargap=0.25,
         paper_bgcolor=C["surface"],
         plot_bgcolor=C["surface"],
         font=dict(color=C["ink2"], family='system-ui, -apple-system, "Segoe UI", sans-serif'),
         hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
-        margin=dict(l=40, r=20, t=60, b=30),
+        legend=dict(orientation="h", yanchor="bottom", y=1.03, x=0, font=dict(size=10)),
+        margin=dict(l=40, r=20, t=90, b=30),
         xaxis_rangeslider_visible=False,
     )
     fig.update_xaxes(gridcolor=C["grid"], zeroline=False)
@@ -550,7 +619,7 @@ def manage_watchlist_panel(cfg) -> None:
             "ticker, click **Refresh data now** in the sidebar to fetch its "
             "data before it shows up with real numbers."
         )
-        c1, c2 = st.columns([4, 1])
+        c1, c2 = st.columns([4, 1], gap="small")
         new_ticker = c1.text_input(
             "Add a ticker symbol",
             key="add_ticker_input",
@@ -570,13 +639,17 @@ def manage_watchlist_panel(cfg) -> None:
             st.warning("Your watchlist is empty — add a ticker above.")
             return
 
-        st.divider()
-        hdr = st.columns([1, 3, 1, 1, 1])
+        ROW_COLS = [0.6, 2.2, 0.55, 0.55, 0.55, 0.55, 0.6]
+        hdr = st.columns(ROW_COLS, gap="small")
         hdr[0].caption("Pin")
         hdr[1].caption("Ticker")
-        hdr[2].caption("Move")
+        hdr[2].caption("⤒")
+        hdr[3].caption("↑")
+        hdr[4].caption("↓")
+        hdr[5].caption("⤓")
+        hdr[6].caption("Del")
         for i, ticker in enumerate(working):
-            row = st.columns([1, 3, 1, 1, 1])
+            row = st.columns(ROW_COLS, gap="small")
             is_pinned = row[0].checkbox(
                 "Pin", value=ticker in pinned, key=f"pin_{ticker}", label_visibility="collapsed"
             )
@@ -585,13 +658,19 @@ def manage_watchlist_panel(cfg) -> None:
             else:
                 pinned.discard(ticker)
             row[1].write(f"**{ticker}**")
-            if row[2].button("↑", key=f"up_{ticker}", disabled=(i == 0), help="Move up"):
+            if row[2].button("⤒", key=f"top_{ticker}", disabled=(i == 0), help="Move to top"):
+                working.insert(0, working.pop(i))
+                st.rerun()
+            if row[3].button("↑", key=f"up_{ticker}", disabled=(i == 0), help="Move up"):
                 working[i - 1], working[i] = working[i], working[i - 1]
                 st.rerun()
-            if row[3].button("↓", key=f"down_{ticker}", disabled=(i == len(working) - 1), help="Move down"):
+            if row[4].button("↓", key=f"down_{ticker}", disabled=(i == len(working) - 1), help="Move down"):
                 working[i + 1], working[i] = working[i], working[i + 1]
                 st.rerun()
-            if row[4].button("🗑️", key=f"del_{ticker}", help=f"Remove {ticker} from your watchlist"):
+            if row[5].button("⤓", key=f"bottom_{ticker}", disabled=(i == len(working) - 1), help="Move to bottom"):
+                working.append(working.pop(i))
+                st.rerun()
+            if row[6].button("🗑️", key=f"del_{ticker}", help=f"Remove {ticker} from your watchlist"):
                 working.remove(ticker)
                 pinned.discard(ticker)
                 if st.session_state.get("detail_ticker") == ticker:
@@ -623,66 +702,44 @@ def overview_page(cfg):
 
         display = ok.sort_values(
             ["_pinned", "_sort", "Whale %"], ascending=[False, True, False]
-        ).drop(columns=["Status", "_sort", "_fresh_msg", "_severity"]).reset_index(drop=True)
-        display.insert(0, "📌", display.pop("_pinned").map({True: "📌", False: ""}))
-        st.caption("💡 Click a row to open that stock's chart. Pinned stocks (📌) stay on top.")
-        event = st.dataframe(
-            display,
-            use_container_width=True,
-            hide_index=True,
-            height=_table_height(len(display)),
-            on_select="rerun",
-            selection_mode="single-row",
-            column_config={
-                "📌": st.column_config.TextColumn(
-                    "📌", help="Pinned in 'Manage watchlist' above — stays sorted to the top.", width="small"
-                ),
-                "Ticker": st.column_config.TextColumn(
-                    "Ticker", help="Click anywhere on a row to open that stock's full chart on the Ticker detail page."
-                ),
-                "Action": st.column_config.TextColumn(
-                    "Action",
-                    help=(
-                        "🟢 Buy = this IS a buy signal · 🟠 Trim = this IS a "
-                        "sell signal (take some profit) · 🟡 Watch = no signal "
-                        "yet, but conditions may be building toward one · "
-                        "🔵 Hold = no signal, trend still looks positive · "
-                        "⚪ Wait = no signal, nothing stands out"
-                    ),
-                ),
-                "Close": st.column_config.NumberColumn(
-                    "Close",
-                    help="Last COMPLETED daily close (not a live intraday quote — see the ticker detail page for a delayed live quote where available).",
-                ),
-                "Whale %": st.column_config.ProgressColumn(
-                    "Whale %",
-                    min_value=0,
-                    max_value=100,
-                    format="%.1f",
-                    help=(
-                        "0-100 estimate of how much big investors (\"whales\") "
-                        "are buying this stock, built from free public data "
-                        "(FINRA dark-pool volume + SEC 13F filings + price/volume "
-                        "patterns). 50 = neutral, higher = more buying."
-                    ),
-                ),
-                "Δ 20d": st.column_config.NumberColumn(
-                    "Δ 20d",
-                    help="How much the Whale % has changed over the last ~20 trading days. Positive = big-investor buying increasing.",
-                ),
-                "Retail %": st.column_config.NumberColumn(
-                    "Retail %",
-                    help="0-100 estimate of regular/individual-investor buying, using the same method as Whale %. 50 = neutral.",
-                ),
-                "Zone": st.column_config.TextColumn(
-                    "Zone",
-                    help="Whale-score threshold band: weak <35 · momentum 35-50 · rise 50-75 · soar >75 (per-ticker configurable).",
-                ),
-            },
-        )
-        clicked_rows = (event.get("selection") or {}).get("rows") if event else None
-        if clicked_rows:
-            go_to_ticker(display.iloc[clicked_rows[0]]["Ticker"])
+        ).reset_index(drop=True)
+
+        st.caption("💡 Click 📈 to open a stock's chart. Pinned stocks (📌) stay on top.")
+        # A native Streamlit row list, not st.dataframe: avoids the built-in
+        # row-selection checkbox (confusing — looked like a "pin" toggle) and
+        # guarantees no nested scrollbar, since plain elements never scroll
+        # internally the way a data-grid does.
+        ROW_COLS = [0.35, 0.8, 1.1, 0.8, 1.6, 0.7, 0.8, 0.8, 0.45]
+        HEADERS = [
+            ("📌", "Pinned in 'Manage watchlist' above — stays sorted to the top."),
+            ("Ticker", "The stock symbol."),
+            ("Action", "🟢 Buy = buy signal · 🟠 Trim = sell signal · 🟡 Watch = building toward a buy · 🔵 Hold = trend positive, no signal · ⚪ Wait = nothing stands out"),
+            ("Close", "Last COMPLETED daily close (not a live quote)."),
+            ("Whale %", "0-100 estimate of big-investor buying (FINRA dark-pool volume + SEC 13F + price/volume patterns). 50 = neutral."),
+            ("Δ 20d", "Change in Whale % over the last ~20 trading days. Positive = buying increasing."),
+            ("Retail %", "0-100 estimate of regular/individual-investor buying. 50 = neutral."),
+            ("Zone", "weak <35 · momentum 35-50 · rise 50-75 · soar >75."),
+            ("📈", "Open this stock's full chart."),
+        ]
+        hdr = st.columns(ROW_COLS, gap="small")
+        for c, (label, tip) in zip(hdr, HEADERS):
+            c.markdown(f'<span title="{tip}" style="font-size:0.8rem;color:#898781;">{label}</span>', unsafe_allow_html=True)
+        for _, r in display.iterrows():
+            cells = st.columns(ROW_COLS, gap="small")
+            cells[0].write("📌" if r["_pinned"] else "")
+            cells[1].markdown(f"**{r['Ticker']}**")
+            cells[2].write(r["Action"])
+            cells[3].write(f"{r['Close']:,.2f}")
+            wv = float(r["Whale %"])
+            filled = int(round(wv / 10))
+            bar = "▓" * filled + "░" * (10 - filled)
+            cells[4].markdown(f"`{bar}` {wv:.1f}")
+            d20 = r["Δ 20d"]
+            cells[5].write("—" if d20 is None or pd.isna(d20) else f"{d20:+.1f}")
+            cells[6].write(f"{float(r['Retail %']):.1f}")
+            cells[7].write(r["Zone"])
+            if cells[8].button("📈", key=f"chart_{r['Ticker']}", help=f"Open {r['Ticker']}'s chart"):
+                go_to_ticker(r["Ticker"])
         st.caption(
             "**Action guide:** 🟢 Buy = this IS a buy signal, consider buying "
             "gradually (DCA, Dollar-Cost Averaging) rather than all at once · "
@@ -822,38 +879,15 @@ weekly. This is not financial advice.*
         )
 
 
-def detail_page(cfg):
-    working = get_working_watchlist(cfg)
-    if not working:
-        st.warning("Your watchlist is empty — add a ticker in the Overview tab's Manage watchlist panel.")
-        return
-    if st.session_state.get("detail_ticker") not in working:
-        st.session_state["detail_ticker"] = working[0]
-
-    col1, col2 = st.columns([2, 1])
-    ticker = col1.selectbox("Ticker", working, key="detail_ticker")
-    tf_label = col2.radio(
-        "Bar size",
-        list(TIMEFRAMES),
-        horizontal=True,
-        index=1,
-        help=(
-            "How much time each bar on the chart below covers: one day, "
-            "one week, or one month. The buy/sell signal above always uses "
-            "the Weekly view regardless of this setting, to match the "
-            "Overview tab."
-        ),
-    )
-    timeframe = TIMEFRAMES[tf_label]
-
+def detail_page(cfg, ticker: str, timeframe: str):
     verdict_banner(ticker, cfg.thresholds_for(ticker))
     how_to_read_expander()
 
     frame = load_ticker_frame(ticker, timeframe)
     if frame.empty:
         st.warning(
-            "No data cached for this ticker yet. Click **Refresh data now** in the "
-            "sidebar — if it still comes up empty, live FINRA/EDGAR/Yahoo fetches may "
+            "No data cached for this ticker yet. Click **🔄 Refresh** at the top of "
+            "the page — if it still comes up empty, live FINRA/EDGAR/Yahoo fetches may "
             "be failing on this host; set the `WHALETRADING_DEMO=1` secret for a "
             "reliable demo instead."
         )
@@ -979,13 +1013,19 @@ def detail_page(cfg):
                 holdings.groupby("report_period")["shares"].sum().rename("tracked 13F shares")
             )
             st.write("Tracked institutional (13F) shares by quarter:")
-            st.dataframe(by_period.to_frame(), use_container_width=True)
+            st.dataframe(
+                by_period.to_frame(),
+                use_container_width=True,
+                height=_table_height(len(by_period)),
+            )
+        tail = frame[
+            ["close", "volume", "whale_score", "retail_score",
+             "buy_signal", "buy_reason", "sell_signal", "sell_reason"]
+        ].tail(50)
         st.dataframe(
-            frame[
-                ["close", "volume", "whale_score", "retail_score",
-                 "buy_signal", "buy_reason", "sell_signal", "sell_reason"]
-            ].tail(50),
+            tail,
             use_container_width=True,
+            height=_table_height(len(tail)),
         )
 
 
@@ -1008,40 +1048,30 @@ def main():
     working = get_working_watchlist(cfg)
     st.session_state.setdefault("nav_view", NAV_OPTIONS[0])
     st.session_state.setdefault("detail_ticker", working[0] if working else None)
+    st.session_state.setdefault("bar_size_label", "Weekly")
     pending = st.session_state.pop("pending_nav", None)
     if pending:
         st.session_state["nav_view"], st.session_state["detail_ticker"] = pending
 
     with st.spinner("First run — fetching data (FINRA / EDGAR / prices)…"):
         bootstrap_data(cfg)
+    auto_refresh_if_stale(cfg)
 
-    st.title("🐋 WhaleTrading")
-    st.caption(
-        "Institutional (whale) accumulation tracker built entirely on free data: "
-        "FINRA off-exchange volume, SEC 13F (institutional-holdings) filings, and "
-        "volume-classified OHLCV (price & volume) data. "
-        "Scores are proxies — no public feed labels trades as institutional. "
-        "See the 🕐 Data freshness panel below and the 📖 How to read this guide "
-        "on each stock's page for full definitions."
-    )
-    if cfg.demo_mode:
-        st.info(
-            "🎭 **Preview mode — every number on this page is a made-up example, not "
-            "real market data.** This was turned on so the app always has something "
-            "to show. To switch to real prices and real signals: open this app on "
-            "**Streamlit Cloud → Settings → Secrets**, delete the `WHALETRADING_DEMO` "
-            "line, then reboot the app."
+    title_col, refresh_col = st.columns([3, 1.3], gap="small")
+    with title_col:
+        st.markdown("### 🐋 WhaleTrading")
+        st.caption(
+            "Institutional (whale) accumulation tracker on free data. See 🕐 Data "
+            "freshness and 📖 How to read this for definitions."
         )
-
-    with st.sidebar:
-        st.header("Data")
+    with refresh_col:
         conn = store.connect()
         last = store.get_meta(conn, "last_refresh:pipeline")
         conn.close()
-        st.write(f"Last refresh: {_format_singapore(last)}")
         if st.button(
-            "Refresh data now",
+            "🔄 Refresh data",
             type="primary",
+            use_container_width=True,
             help=(
                 "Re-fetches FINRA (dark-pool volume), SEC EDGAR (13F holdings), "
                 "and Yahoo Finance (prices) for every watchlist ticker, then "
@@ -1056,26 +1086,47 @@ def main():
                 st.warning("Unavailable sources: " + ", ".join(failed))
             st.cache_data.clear()
             st.rerun()
-        st.divider()
-        st.caption(
-            "Pin, add, remove, or reorder tickers for this session in "
-            "**Manage watchlist** (Overview tab). For permanent changes, "
-            "edit `config/watchlist.yaml` in the repo instead."
+        st.caption(f"Last refresh: {_format_singapore(last)}")
+
+    if cfg.demo_mode:
+        st.info(
+            "🎭 **Preview mode — every number on this page is a made-up example, not "
+            "real market data.** To switch to real prices and real signals: open this "
+            "app on **Streamlit Cloud → Settings → Secrets**, delete the "
+            "`WHALETRADING_DEMO` line, then reboot the app."
         )
 
-    # Top-level radio, not sidebar nav or st.tabs: the sidebar auto-collapses
-    # on narrow embeds (e.g. Streamlit Community Cloud), which was hiding
-    # "Ticker detail" entirely — a radio here stays visible regardless of
-    # sidebar state, same as tabs did, but (unlike tabs) can be switched
-    # programmatically so clicking an Overview row can jump straight to it.
-    view = st.radio(
-        "View", NAV_OPTIONS, horizontal=True, key="nav_view", label_visibility="collapsed"
-    )
+    if not working:
+        st.warning("Your watchlist is empty. Switch to Overview → Manage watchlist to add a ticker.")
+        view = NAV_OPTIONS[0]
+        ticker, timeframe = None, "W"
+    else:
+        # Persistent top bar: view toggle, ticker, and bar size are always
+        # visible together, on both pages — so you can line up the next
+        # stock's chart while still looking at the Overview table, then flip
+        # the toggle, instead of hunting for these controls inside the page.
+        nav_col, tk_col, bs_col = st.columns([1.5, 1.2, 1.5], gap="small")
+        view = nav_col.radio(
+            "View", NAV_OPTIONS, horizontal=True, key="nav_view", label_visibility="collapsed"
+        )
+        if st.session_state.get("detail_ticker") not in working:
+            st.session_state["detail_ticker"] = working[0]
+        ticker = tk_col.selectbox("Ticker", working, key="detail_ticker", label_visibility="collapsed")
+        tf_label = bs_col.radio(
+            "Bar size",
+            list(TIMEFRAMES),
+            horizontal=True,
+            key="bar_size_label",
+            label_visibility="collapsed",
+            help="How much time each bar on the chart covers. The buy/sell verdict always uses Weekly, regardless of this setting.",
+        )
+        timeframe = TIMEFRAMES[tf_label]
+
     st.divider()
     if view == NAV_OPTIONS[0]:
         overview_page(cfg)
-    else:
-        detail_page(cfg)
+    elif ticker:
+        detail_page(cfg, ticker, timeframe)
 
 
 main()
