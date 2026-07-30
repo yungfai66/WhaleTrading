@@ -9,6 +9,7 @@ from __future__ import annotations
 import html
 import json
 import os
+import re
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -129,37 +130,68 @@ ACTION_GUIDE = [
 ]
 
 
-def get_working_watchlist(cfg) -> list[str]:
-    """The ticker list actually shown, after pins/adds/removes/reordering.
-    Starts as a copy of cfg.watchlist, seeded from a synced GitHub Gist
-    when cross-device sync is configured (see gist_configured / README) —
-    otherwise session-scoped only and resets on page reload, since the
-    app's filesystem is ephemeral on Streamlit Cloud and silently rewriting
+def get_watchlist_state(cfg) -> dict[str, dict]:
+    """Every watchlist's order/pinned, keyed by name — the full multi-
+    watchlist state. Seeded once per session from a synced GitHub Gist when
+    cross-device sync is configured (see gist_configured / README),
+    otherwise from config/watchlist.yaml — session-scoped only and resets
+    on page reload without Gist sync, since the app's filesystem is
+    ephemeral on Streamlit Cloud and silently rewriting
     config/watchlist.yaml would look like it worked locally but lose the
-    change on every redeploy there."""
-    if "watchlist_order" not in st.session_state:
+    change on every redeploy there.
+
+    Only watchlist *names* present in the current config are kept — a name
+    that only exists in an older synced Gist (e.g. after a config rename)
+    is dropped rather than surfaced as a phantom, unselectable entry.
+    """
+    if "watchlists" not in st.session_state:
         synced = None
         creds = gist_configured()
         if creds:
-            synced = gist_store.load_watchlist_state(*creds)
-        if synced and synced.get("watchlist_order"):
-            st.session_state["watchlist_order"] = list(synced["watchlist_order"])
-            st.session_state["pinned_tickers"] = set(synced.get("pinned_tickers", []))
-        else:
-            st.session_state["watchlist_order"] = list(cfg.watchlist)
-            st.session_state["pinned_tickers"] = set()
-    return st.session_state["watchlist_order"]
+            synced = gist_store.load_state(*creds)
+        synced_lists = (synced or {}).get("watchlists") or {}
+        st.session_state["watchlists"] = {
+            name: {
+                "order": list(synced_lists[name]["order"]) if name in synced_lists else list(tickers),
+                "pinned": set(synced_lists[name].get("pinned", [])) if name in synced_lists else set(),
+            }
+            for name, tickers in cfg.watchlists.items()
+        }
+        synced_active = (synced or {}).get("active_watchlist")
+        st.session_state["active_watchlist"] = (
+            synced_active if synced_active in cfg.watchlists else cfg.default_watchlist
+        )
+    if st.session_state.get("active_watchlist") not in st.session_state["watchlists"]:
+        st.session_state["active_watchlist"] = cfg.default_watchlist
+    return st.session_state["watchlists"]
 
 
-def sync_watchlist_state(order: list[str], pinned: set[str]) -> None:
-    """Push the current order/pins to the Gist when sync is configured.
-    Fails open — a sync error never blocks the pin/add/remove/reorder
-    action itself, it just means this particular change won't show up on
-    other devices until the next successful save."""
+def get_working_watchlist(cfg) -> list[str]:
+    """The ticker list actually shown for the *active* watchlist, after
+    pins/adds/removes/reordering."""
+    state = get_watchlist_state(cfg)
+    return state[st.session_state["active_watchlist"]]["order"]
+
+
+def get_active_pinned(cfg) -> set[str]:
+    state = get_watchlist_state(cfg)
+    return state[st.session_state["active_watchlist"]]["pinned"]
+
+
+def sync_watchlist_state() -> None:
+    """Push every watchlist's order/pins, plus which one is active, to the
+    Gist when sync is configured. Fails open — a sync error never blocks
+    the pin/add/remove/reorder/paste-import action itself, it just means
+    this particular change won't show up on other devices until the next
+    successful save."""
     creds = gist_configured()
     if not creds:
         return
-    if not gist_store.save_watchlist_state(*creds, order, sorted(pinned)):
+    payload = {
+        name: {"order": v["order"], "pinned": sorted(v["pinned"])}
+        for name, v in st.session_state["watchlists"].items()
+    }
+    if not gist_store.save_state(*creds, st.session_state["active_watchlist"], payload):
         st.warning("Couldn't sync to your other devices right now — this change is still saved for this session.")
 
 
@@ -180,6 +212,17 @@ def _format_singapore(iso_ts: str | None) -> str:
         return "never"
     dt = datetime.fromisoformat(iso_ts).astimezone(ZoneInfo("Asia/Singapore"))
     return dt.strftime("%Y-%m-%d %H:%M") + " SGT"
+
+
+def _mark_watchlist_refreshed(watchlist_name: str) -> None:
+    """Records a per-watchlist last-refresh timestamp (distinct from
+    pipeline.py's own global "last_refresh:pipeline", which just means "a
+    refresh ran for *some* ticker set") so the sidebar caption reflects
+    whichever watchlist is actually active, not whichever was refreshed
+    most recently overall."""
+    conn = store.connect()
+    store.mark_refreshed(conn, f"pipeline:{watchlist_name}")
+    conn.close()
 
 
 st.set_page_config(page_title="WhaleTrading", page_icon="🐋", layout="wide")
@@ -306,13 +349,22 @@ def get_config():
 @st.cache_resource
 def bootstrap_data(_cfg) -> bool:
     """Populate the SQLite cache on a fresh container so visitors never see an
-    empty dashboard. Runs at most once per container lifecycle (cache_resource)."""
+    empty dashboard. Runs at most once per container lifecycle (cache_resource).
+
+    Scoped to just the default watchlist, not every watchlist combined —
+    with several imported lists totaling 100+ tickers, fetching everything
+    on first load would make a cold start far slower than necessary. Other
+    watchlists populate on demand, the first time someone switches to one
+    and clicks 🔄 Refresh data (or edits it), same as this scoped bootstrap
+    covers the default one.
+    """
     conn = store.connect()
     has_data = conn.execute("SELECT 1 FROM metrics LIMIT 1").fetchone() is not None
     conn.close()
     if has_data:
         return False
-    refresh_all(_cfg)
+    refresh_all(_cfg, tickers=_cfg.watchlists[_cfg.default_watchlist])
+    _mark_watchlist_refreshed(_cfg.default_watchlist)
     return True
 
 
@@ -325,11 +377,19 @@ AUTO_REFRESH_STALE_MINUTES = 30
 
 
 def auto_refresh_if_stale(cfg) -> None:
+    """Fires at most once per session, scoped to whichever watchlist is
+    active at that moment (almost always the default one, at page load).
+    Switching to a *different*, never-yet-refreshed watchlist later in the
+    same session doesn't re-trigger this — the existing "no data — run
+    refresh" row messaging covers that; 🔄 Refresh data handles it in one
+    click without a second automatic full-app refresh happening in the
+    background."""
     if st.session_state.get("_auto_refresh_done"):
         return
     st.session_state["_auto_refresh_done"] = True
+    active_name = st.session_state["active_watchlist"]
     conn = store.connect()
-    last = store.get_meta(conn, "last_refresh:pipeline")
+    last = store.get_meta(conn, f"last_refresh:pipeline:{active_name}")
     conn.close()
     if last:
         age_min = (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds() / 60
@@ -337,6 +397,7 @@ def auto_refresh_if_stale(cfg) -> None:
             return
     with st.spinner("Refreshing data…"):
         refresh_all(cfg, tickers=get_working_watchlist(cfg))
+        _mark_watchlist_refreshed(active_name)
     st.cache_data.clear()
 
 
@@ -864,9 +925,58 @@ def _freshness_section(demo_mode: bool) -> None:
         )
 
 
+def _bulk_import_ui(active: str, working: list[str], pinned: set[str]) -> None:
+    """Paste-replace the active watchlist's entire ticker list in one action
+    — the practical way to keep a large imported list (e.g. from Yahoo
+    Finance) in sync: copy your list from wherever it lives, paste it here,
+    done. One-by-one Add/Remove below still works for small tweaks."""
+    with st.expander("📋 Paste-import a ticker list (e.g. re-sync from Yahoo)"):
+        st.caption(
+            "Paste tickers separated by commas, spaces, or newlines — this "
+            "**replaces** the whole list below. Pins on tickers no longer "
+            "present are dropped; everything else (other watchlists) is "
+            "untouched."
+        )
+        pasted = st.text_area(
+            "Paste tickers", key=f"bulk_import_text_{active}",
+            label_visibility="collapsed", height=100,
+            placeholder="AAPL, MSFT, NVDA\nTSLA\n...",
+        )
+        if st.button("Replace with pasted list", key=f"bulk_import_apply_{active}") and pasted.strip():
+            new_order, seen = [], set()
+            for raw_sym in re.split(r"[\s,]+", pasted.strip()):
+                sym = raw_sym.strip().upper()
+                if sym and sym not in seen:
+                    seen.add(sym)
+                    new_order.append(sym)
+            if not new_order:
+                st.warning("No tickers found in the pasted text.")
+            else:
+                working[:] = new_order
+                pinned &= set(new_order)
+                # Can't reassign st.session_state["detail_ticker"] directly
+                # here — the sidebar's Ticker selectbox (same key) has
+                # already been instantiated earlier in this run, and
+                # Streamlit forbids modifying a widget's key after that.
+                # Stash it the same way go_to_ticker() does and apply it at
+                # the top of the *next* run, before that widget renders.
+                if st.session_state.get("detail_ticker") not in new_order:
+                    st.session_state["pending_nav"] = ("overview", new_order[0])
+                st.session_state.pop("ov_sort", None)
+                sync_watchlist_state()
+                st.success(f"Replaced “{active}” with {len(new_order)} tickers.")
+                st.rerun()
+
+
 def _watchlist_edit_ui(cfg, working: list[str], pinned: set[str]) -> None:
     """Add/delete/pin/drag-reorder tickers — shown in place of the scored
-    table while Edit mode is on."""
+    table while Edit mode is on. `working`/`pinned` are the live list/set
+    objects inside st.session_state["watchlists"][active_watchlist] — every
+    mutation below (append/remove/&=) writes straight through to session
+    state, same object, no reassignment needed except where the whole list
+    is replaced wholesale (drag-reorder, paste-import)."""
+    active = st.session_state["active_watchlist"]
+
     # A widget's session_state value can't be reassigned after that widget
     # has already been instantiated in the same run — so clearing the text
     # input after "Add" needs the stash-then-rerun pattern, applied *before*
@@ -891,16 +1001,18 @@ def _watchlist_edit_ui(cfg, working: list[str], pinned: set[str]) -> None:
     if add_col2.button("➕ Add", use_container_width=True) and new_ticker.strip():
         sym = new_ticker.strip().upper()
         if sym in working:
-            st.warning(f"{sym} is already in your watchlist.")
+            st.warning(f"{sym} is already in “{active}”.")
         else:
             working.append(sym)
             st.session_state["_clear_add_ticker_input"] = True
             st.session_state.pop("ov_sort", None)
-            sync_watchlist_state(working, pinned)
+            sync_watchlist_state()
             st.rerun()
 
+    _bulk_import_ui(active, working, pinned)
+
     if not working:
-        st.info("Your watchlist is empty — add a ticker above.")
+        st.info("This watchlist is empty — add a ticker above.")
         return
 
     def _label(t: str) -> str:
@@ -911,22 +1023,23 @@ def _watchlist_edit_ui(cfg, working: list[str], pinned: set[str]) -> None:
 
     labels = [_label(t) for t in working]
     st.caption("⠿ Drag to reorder:")
-    # Key derived from the current ticker set/order (not a fixed string): a
-    # bidirectional component only calls setComponentValue() in response to
-    # a real user drag, so after any *other* change to `working` (add/
-    # delete), an unchanged key would make it echo back its last cached
-    # value — the pre-change list — which we'd then wrongly treat as a new
-    # drag and use to clobber the just-made change. A content-derived key
-    # forces a remount (fresh `default=labels`) whenever the set/order
-    # actually changes underneath it, so the returned value only ever
-    # differs from `labels` when the user genuinely dragged something.
-    drag_key = "watchlist_drag_" + "|".join(working)
+    # Key derived from the active watchlist + its current ticker set/order
+    # (not a fixed string): a bidirectional component only calls
+    # setComponentValue() in response to a real user drag, so after any
+    # *other* change to `working` (add/delete/switch watchlist), an
+    # unchanged key would make it echo back its last cached value — the
+    # pre-change list — which we'd then wrongly treat as a new drag and use
+    # to clobber the just-made change. A content-derived key forces a
+    # remount (fresh `default=labels`) whenever the set/order actually
+    # changes underneath it, so the returned value only ever differs from
+    # `labels` when the user genuinely dragged something.
+    drag_key = "watchlist_drag_" + active + "|" + "|".join(working)
     new_labels = sort_items(labels, direction="vertical", key=drag_key)
     if new_labels != labels:
         new_order = [working[labels.index(lbl)] for lbl in new_labels]
-        st.session_state["watchlist_order"] = new_order
+        working[:] = new_order
         st.session_state.pop("ov_sort", None)
-        sync_watchlist_state(new_order, pinned)
+        sync_watchlist_state()
         st.rerun()
 
     st.caption("Pin / remove:")
@@ -934,27 +1047,29 @@ def _watchlist_edit_ui(cfg, working: list[str], pinned: set[str]) -> None:
     for ticker in working:
         row = st.columns([0.5, 2.5, 0.6], gap="small")
         is_pinned = row[0].checkbox(
-            "Pin", value=ticker in pinned, key=f"pin_{ticker}", label_visibility="collapsed"
+            "Pin", value=ticker in pinned, key=f"pin_{active}_{ticker}", label_visibility="collapsed"
         )
         if is_pinned:
             pinned.add(ticker)
         else:
             pinned.discard(ticker)
         row[1].write(f"**{ticker}**")
-        if row[2].button("🗑️", key=f"del_{ticker}", help=f"Remove {ticker} from your watchlist"):
+        if row[2].button("🗑️", key=f"del_{active}_{ticker}", help=f"Remove {ticker} from “{active}”"):
             working.remove(ticker)
             pinned.discard(ticker)
+            # Same deferred-assignment reasoning as the paste-import handler
+            # above — can't set detail_ticker directly this late in the run.
             if st.session_state.get("detail_ticker") == ticker:
-                st.session_state["detail_ticker"] = working[0] if working else None
+                st.session_state["pending_nav"] = ("overview", working[0] if working else None)
             st.session_state.pop("ov_sort", None)
-            sync_watchlist_state(working, pinned)
+            sync_watchlist_state()
             st.rerun()
 
     # Pin checkboxes trigger Streamlit's own implicit rerun (no explicit
     # st.rerun() above to hang a save call off), so sync here instead, once
     # per render, only when a pin actually changed this run.
     if pinned != pinned_before:
-        sync_watchlist_state(working, pinned)
+        sync_watchlist_state()
 
 
 # Column key -> (header label, tooltip, dataframe field to sort by). Pin and
@@ -1000,7 +1115,7 @@ def _cycle_sort(col_key: str) -> None:
 
 def overview_page(cfg):
     working = get_working_watchlist(cfg)
-    pinned = st.session_state["pinned_tickers"]
+    pinned = get_active_pinned(cfg)
 
     st.markdown(
         " · ".join(
@@ -1011,7 +1126,7 @@ def overview_page(cfg):
     )
 
     top = st.columns([5, 1], gap="small")
-    top[0].subheader("Watchlist")
+    top[0].subheader(f"Watchlist — {st.session_state['active_watchlist']}")
     edit_mode = st.session_state.get("watchlist_edit_mode", False)
     if top[1].button("✓ Done" if edit_mode else "✏️ Edit", use_container_width=True):
         st.session_state["watchlist_edit_mode"] = not edit_mode
@@ -1615,14 +1730,23 @@ def main():
         name = load_company_name(t)
         return f"{t} — {name}" if name else t
 
-    # Left panel: Refresh button, then link-style nav buttons (no radio
-    # bullets), with the Ticker/Bar-size controls nested directly under
-    # "Ticker detail" since they only matter for that page. Collapsible and
-    # resizable by dragging its right edge — native Streamlit sidebar
-    # behavior, nothing custom needed for that part.
+    # Left panel: watchlist switcher, Refresh button, then link-style nav
+    # buttons (no radio bullets), with the Ticker/Bar-size controls nested
+    # directly under "Ticker detail" since they only matter for that page.
+    # Collapsible and resizable by dragging its right edge — native
+    # Streamlit sidebar behavior, nothing custom needed for that part.
     with st.sidebar:
+        st.selectbox(
+            "Watchlist", list(cfg.watchlists), key="active_watchlist",
+            help=(
+                "Which watchlist is active — sets what the Watchlist page "
+                "shows, what the Ticker detail dropdown offers, and which "
+                "list 🔄 Refresh data touches."
+            ),
+        )
+        active_name = st.session_state["active_watchlist"]
         conn = store.connect()
-        last = store.get_meta(conn, "last_refresh:pipeline")
+        last = store.get_meta(conn, f"last_refresh:pipeline:{active_name}")
         conn.close()
         if st.button(
             "🔄 Refresh data",
@@ -1630,19 +1754,22 @@ def main():
             use_container_width=True,
             help=(
                 "Re-fetches FINRA (dark-pool volume), SEC EDGAR (13F holdings), "
-                "and Yahoo Finance (prices) for every watchlist ticker, then "
-                "recomputes whale/retail scores. First run can take a few "
-                "minutes; later refreshes are incremental."
+                "and Yahoo Finance (prices) for every ticker in the *active* "
+                "watchlist above, then recomputes whale/retail scores. Other "
+                "watchlists are untouched — switch to one and refresh it "
+                "separately. First run for a list can take a few minutes; "
+                "later refreshes are incremental."
             ),
         ):
-            with st.spinner("Fetching FINRA / EDGAR / prices…"):
+            with st.spinner(f"Fetching FINRA / EDGAR / prices for “{active_name}”…"):
                 summary = refresh_all(cfg, tickers=get_working_watchlist(cfg))
+                _mark_watchlist_refreshed(active_name)
             failed = summary.get("sources_failed", [])
             if failed:
                 st.warning("Unavailable sources: " + ", ".join(failed))
             st.cache_data.clear()
             st.rerun()
-        st.caption(f"Last refresh: {_format_singapore(last)}")
+        st.caption(f"Last refresh of “{active_name}”: {_format_singapore(last)}")
         st.divider()
 
         # Collect a page switch and apply st.rerun() only after every widget

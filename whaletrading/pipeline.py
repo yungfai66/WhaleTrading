@@ -27,15 +27,18 @@ log = logging.getLogger(__name__)
 def refresh_all(
     cfg: Config | None = None, db_path=None, tickers: list[str] | None = None
 ) -> dict:
-    """Refresh the given tickers (default: cfg.watchlist); returns a
-    per-source summary for the UI/CLI.
+    """Refresh the given tickers (default: cfg.all_tickers, every watchlist
+    combined); returns a per-source summary for the UI/CLI.
 
-    `tickers` lets a caller refresh a different (e.g. session-customized)
-    watchlist than the one in config/watchlist.yaml — used by the app's
-    "add a ticker" feature so a newly added symbol actually gets fetched.
+    `tickers` lets a caller refresh a different (e.g. session-customized, or
+    a single active watchlist) set than "everything in config" — the app
+    always passes an explicit list scoped to whichever watchlist is active,
+    since refreshing all of them on every click would be far slower than
+    refreshing just the one you're looking at. The no-args CLI default
+    (`python -m whaletrading.pipeline`) still refreshes every watchlist.
     """
     cfg = cfg or load_config()
-    tickers = list(tickers) if tickers else list(cfg.watchlist)
+    tickers = list(tickers) if tickers else list(cfg.all_tickers)
     conn = store.connect(db_path)
     summary: dict = {"tickers": {}, "demo_mode": cfg.demo_mode}
 

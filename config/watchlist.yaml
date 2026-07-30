@@ -1,32 +1,240 @@
 # ---------------------------------------------------------------------------
-# WhaleTrading watchlist & tuning
+# WhaleTrading watchlists & tuning
 #
-# Add/remove tickers freely. Everything below has sensible defaults; only
-# `watchlist` is required.
+# Add/remove/rename watchlists freely under `watchlists:` — each becomes a
+# selectable entry in the app's sidebar. `default_watchlist` picks which one
+# a fresh session starts on. This file only seeds a *new* session/device;
+# once running, edits happen in the app itself (Edit mode, or the paste-
+# import box) and are session/Gist-scoped, not written back here.
 # ---------------------------------------------------------------------------
 
-watchlist:
-  - NVDA
-  - AAPL
-  - MSFT
-  - TSLA
-  - AMZN
-  - META
-  - GOOGL
-  - QQQ
-  - SPY
-  - SPCX
-  - COIN
-  - HOOD
-  - MSTR
-  - BMNR
-  - ECHO
-  - FUTU
-  - PLTR
-  - IREN
-  - RKLB
-  - MU
-  - INTC
+default_watchlist: "Special Watchlist"
+
+watchlists:
+  # Your original hand-picked list.
+  "Special Watchlist":
+    - NVDA
+    - AAPL
+    - MSFT
+    - TSLA
+    - AMZN
+    - META
+    - GOOGL
+    - QQQ
+    - SPY
+    - SPCX
+    - COIN
+    - HOOD
+    - MSTR
+    - BMNR
+    - ECHO
+    - FUTU
+    - PLTR
+    - IREN
+    - RKLB
+    - MU
+    - INTC
+
+  # Imported from the user's Yahoo Finance "US Bought" portfolio (2026-07-30).
+  "US Bought":
+    - ASST
+    - GOOG
+    - TSLA
+    - SPCX
+    - ECHO
+    - LUNR
+    - ASTS
+    - MSTR
+    - BMNR
+    - HOOD
+    - COIN
+    - INTC
+    - GLW
+    - HWM
+    - FUTU
+    - TIGR
+    - SBET
+    - HIMS
+    - PLTR
+    - BBAI
+    - SOUN
+    - IREN
+    - CIFR
+    - GRAB
+    - OPEN
+    - BLSH
+    - UPXI
+    - DFDV
+    - CRCL
+    - GAME
+    - BTC-USD
+    - BITX
+    - TSLL
+    - ARKG
+    - MSTX
+    - SMLR
+    - MARA
+    - CLSK
+    - KULR
+    - TLT
+    - PYPL
+    - MTPLF
+    - ARKVX
+    - NVDA
+    - SMCI
+    - AMD
+    - CRWV
+    - MU
+    - ASML
+    - AMZN
+    - AAPL
+    - RKLB
+    - SOFI
+    - NKE
+    - MSFT
+    - TDOC
+    - AIQ
+    - NU
+    - ZM
+    - META
+    - ARKK
+    - NIO
+    - RIVN
+    - LVMUY
+    - COST
+    - SKLZ
+    - SPOT
+    - CRWD
+    - LC
+    - CHPT
+    - PATH
+    - LOVE
+    - XYZ
+    - BABA
+    - NNDM
+    - LIT
+    - SONO
+    - RIOT
+    - NNOX
+
+  # Imported from the user's Yahoo Finance "My US Stock" portfolio (2026-07-30).
+  "My US Stock":
+    - GRAB
+    - SE
+    - TSM
+    - TWLO
+    - UPST
+    - PD
+    - PINS
+    - SHOP
+    - V
+    - LMND
+    - NFLX
+    - NIO
+    - DFI-USD
+    - BTCC-B.TO
+    - AQB
+    - ROKU
+    - PYPL
+    - EH
+    - IZRL
+    - ISRG
+    - FSLY
+    - AFRM
+    - ENPH
+    - FFIV
+    - AAPL
+    - ADBE
+    - CRM
+    - ETSY
+    - TTCF
+    - ABNB
+    - BYND
+    - SNOW
+    - Z
+    - JD
+    - QCOM
+    - MCD
+    - "1810.HK"
+    - CELH
+    - MSFT
+    - AMZN
+    - BRK-B
+    - RELIANCE.NS
+    - ARKF
+    - DOCU
+    - ARKQ
+    - LULU
+    - NKE
+    - DIS
+    - WM
+    - WMT
+    - MA
+    - TCEHY
+    - BIDU
+
+  # Imported from the user's Yahoo Finance "SGX" portfolio (2026-07-30).
+  # Singapore Exchange tickers — FINRA/SEC 13F components don't apply (US
+  # markets only), so whale scores here are price-pattern-only.
+  "SGX":
+    - AGS.SI
+    - BSL.SI
+    - OV8.SI
+    - S68.SI
+    - AIY.SI
+    - D05.SI
+    - O39.SI
+    - U11.SI
+    - H02.SI
+    - C6L.SI
+    - G13.SI
+    - Z77.SI
+    - G07.SI
+    - QC7.SI
+    - F34.SI
+    - T24.SI
+    - F99.SI
+    - O87.SI
+
+  # Imported from the user's Yahoo Finance "Wood" portfolio (2026-07-30).
+  "Wood":
+    - TSLA
+    - TDOC
+    - COIN
+    - U
+    - SHOP
+    - ROKU
+    - PATH
+    - XYZ
+    - ZM
+    - EXAS
+    - TWLO
+    - SPOT
+    - NTLA
+    - PLTR
+
+  # Imported from the user's Yahoo Finance "AI Meta" portfolio (2026-07-30).
+  # CL=F is a crude-oil futures contract, not an equity — price/volume only.
+  "AI Meta":
+    - CL=F
+    - COIN
+    - AMT
+    - RBLX
+    - NVDA
+    - AMD
+    - U
+    - GOOGL
+    - AI
+    - TRMB
+
+  # Imported from the user's Yahoo Finance "Genomics" portfolio (2026-07-30).
+  "Genomics":
+    - ISRG
+    - CRSP
+    - EDIT
+    - PACB
+    - NVTA
+    - ARKG
 
 # Whale-accumulation thresholds (score 0-100).
 # From the strategy notes: >35 momentum, >50 rise, >75 soar.

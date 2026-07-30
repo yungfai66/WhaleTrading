@@ -18,7 +18,8 @@ DEFAULT_WEIGHTS = {"big_money_volume": 0.45, "dark_pool": 0.35, "inst_13f": 0.20
 
 @dataclass
 class Config:
-    watchlist: list[str]
+    watchlists: dict[str, list[str]]
+    default_watchlist: str
     thresholds_default: dict = field(default_factory=lambda: dict(DEFAULT_THRESHOLDS))
     thresholds_overrides: dict = field(default_factory=dict)
     price_lookback_years: int = 5
@@ -37,6 +38,21 @@ class Config:
         return merged
 
     @property
+    def all_tickers(self) -> list[str]:
+        """Deduped union of every watchlist's tickers, in first-appearance
+        order. Used by the CLI entry point (`python -m whaletrading.pipeline`
+        with no args) for a full manual refresh — the app itself always
+        refreshes just the currently active watchlist, not everything."""
+        seen: set[str] = set()
+        out: list[str] = []
+        for tickers in self.watchlists.values():
+            for t in tickers:
+                if t not in seen:
+                    seen.add(t)
+                    out.append(t)
+        return out
+
+    @property
     def demo_mode(self) -> bool:
         return os.environ.get("WHALETRADING_DEMO", "").strip() in ("1", "true", "yes")
 
@@ -46,9 +62,18 @@ def load_config(path: Path | str | None = None) -> Config:
     settings = raw.get("settings") or {}
     thresholds = raw.get("thresholds") or {}
 
-    watchlist = [str(t).upper() for t in (raw.get("watchlist") or []) if str(t).strip()]
-    if not watchlist:
-        raise ValueError("config watchlist is empty — add at least one ticker")
+    watchlists_raw = raw.get("watchlists") or {}
+    watchlists = {
+        str(name): [str(t).upper() for t in (tickers or []) if str(t).strip()]
+        for name, tickers in watchlists_raw.items()
+    }
+    watchlists = {name: tickers for name, tickers in watchlists.items() if tickers}
+    if not watchlists:
+        raise ValueError("config has no non-empty watchlists — add at least one ticker to one watchlist")
+
+    default_watchlist = str(raw.get("default_watchlist") or next(iter(watchlists)))
+    if default_watchlist not in watchlists:
+        default_watchlist = next(iter(watchlists))
 
     weights = dict(DEFAULT_WEIGHTS)
     weights.update(settings.get("whale_weights") or {})
@@ -57,7 +82,8 @@ def load_config(path: Path | str | None = None) -> Config:
     default_thr.update(thresholds.get("default") or {})
 
     return Config(
-        watchlist=watchlist,
+        watchlists=watchlists,
+        default_watchlist=default_watchlist,
         thresholds_default=default_thr,
         thresholds_overrides={
             str(k).upper(): dict(v) for k, v in (thresholds.get("overrides") or {}).items()

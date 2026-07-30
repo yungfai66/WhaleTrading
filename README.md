@@ -89,9 +89,13 @@ python -m whaletrading.pipeline
 streamlit run app.py
 ```
 
-First refresh backfills ~1 year of FINRA daily files (one HTTP request per
-trading day), so it takes a few minutes; later refreshes are incremental.
-You can also refresh from the sidebar button in the app.
+The CLI with no arguments refreshes **every** watchlist combined; first
+refresh backfills ~1 year of FINRA daily files (one HTTP request per trading
+day) across all of them, so it takes a while — later refreshes are
+incremental. The **app itself** (sidebar 🔄 Refresh data, and the
+auto-bootstrap on first load below) only ever refreshes whichever watchlist
+is currently active, which is much faster — see
+[Multiple watchlists](#multiple-watchlists).
 
 ### Demo mode (no network needed)
 
@@ -104,8 +108,10 @@ Generates deterministic synthetic data so you can explore the UI offline.
 Delete `data/whaletrading.db` before switching between demo and live data.
 
 The app also **auto-bootstraps on first load**: if the SQLite cache is empty
-(e.g. a fresh container), it runs the pipeline once automatically before
-rendering, so you never land on a blank dashboard.
+(e.g. a fresh container), it runs the pipeline once automatically — scoped to
+the default watchlist only, so a cold start isn't slowed down by every
+watchlist you've configured — before rendering, so you never land on a
+blank dashboard.
 
 ## Free online preview — Streamlit Community Cloud
 
@@ -126,6 +132,32 @@ for this is [Streamlit Community Cloud](https://streamlit.io/cloud):
 Community Cloud containers sleep after inactivity and reset their filesystem
 on redeploy/wake, which is exactly what the auto-bootstrap step above exists
 to handle.
+
+## Multiple watchlists
+
+The sidebar's **Watchlist** picker switches between several named lists —
+each with its own tickers, pins, and order. Add, remove, or rename entries
+freely under `watchlists:` in `config/watchlist.yaml`; whichever name is set
+as `default_watchlist` is what a brand-new session starts on.
+
+A few things scope to whichever watchlist is *currently active*, not to all
+of them at once:
+
+- **🔄 Refresh data** only fetches the active list's tickers — switching to
+  a large imported list and refreshing it doesn't also re-fetch every other
+  list. The sidebar caption ("Last refresh of…") reflects this per list.
+- The **Ticker detail** dropdown only offers tickers from the active list.
+- Edit mode (✏️ Edit) — add/remove/pin/drag-reorder — always acts on the
+  active list; other lists are untouched.
+
+**Keeping a large list in sync** (e.g. one you imported from elsewhere):
+Edit mode has a **📋 Paste-import** box — paste a comma/space/newline-
+separated ticker list and it replaces the active watchlist's contents in one
+action (pins on tickers no longer present are dropped). This is the
+practical way to re-sync a 50+ ticker list without adding/removing one at a
+time; there's no live connection to any external account, this app never
+authenticates to anything on your behalf — you copy your list from wherever
+it lives and paste it in.
 
 ## Sync your watchlist across devices (optional, free)
 
@@ -151,17 +183,21 @@ can optionally store it in a private GitHub Gist:
    ```
    (See `.streamlit/secrets.toml.example`.)
 4. Reboot the app. The Manage watchlist panel's caption will confirm sync is
-   active — pins/order/added tickers now save to the Gist on every change
-   and load from it on every new session, on any device.
+   active — every watchlist's pins/order/added tickers (and which one is
+   active) now save to the Gist on every change and load from it on every
+   new session, on any device.
 
 If sync fails for any reason (bad token, network hiccup, rate limit), the
 app falls back to session-only behavior for that change and shows a small
-warning — it never blocks the pin/add/remove/reorder action itself. Omit
-both secrets to keep today's session-only behavior.
+warning — it never blocks the pin/add/remove/reorder/paste-import action
+itself. Omit both secrets to keep today's session-only behavior.
 
 ## Customization — `config/watchlist.yaml`
 
-- **watchlist** — add/remove any NYSE/NASDAQ tickers
+- **watchlists** — a name → ticker-list map; add, remove, or rename entries
+  freely, each becomes a selectable watchlist in the app (see
+  [Multiple watchlists](#multiple-watchlists) above)
+- **default_watchlist** — which entry a fresh session starts on
 - **thresholds.overrides** — per-ticker momentum/rise/soar levels
 - **settings.whale_weights** — re-weight the composite components
 - **managers_13f** — which large managers to track on EDGAR (CIK numbers)
@@ -244,14 +280,16 @@ component.
 ## Architecture
 
 ```
-config/watchlist.yaml        tickers, thresholds, weights, 13F managers
+config/watchlist.yaml        named watchlists, thresholds, weights, 13F managers
 whaletrading/
-  data/prices.py             yfinance OHLCV
+  config.py                  loads watchlist.yaml into Config.watchlists (name -> tickers)
+  data/prices.py             yfinance OHLCV (fetch_daily + batched fetch_daily_batch)
   data/finra_short_volume.py FINRA Reg SHO daily files
   data/finra_ats.py          FINRA ATS weekly (Query API)
   data/sec_13f.py            EDGAR 13F holdings + QoQ deltas
   data/demo.py               synthetic fixtures for demo mode
   data/store.py              SQLite cache (data/whaletrading.db)
+  data/gist_store.py         optional cross-device sync, multi-watchlist schema
   indicators/                ribbon, MACD, candles, whale_score composite
   indicators/fear_greed.py   market-wide Fear & Greed composite
   signals.py                 buy/sell rules

@@ -1,6 +1,7 @@
-"""Optional cross-device sync for the session watchlist (pin/order) via a
-private GitHub Gist. Free (personal GitHub API use), opt-in — the app works
-exactly as before if the two secrets below aren't set.
+"""Optional cross-device sync for watchlist state (order/pins per named
+watchlist, plus which one is active) via a private GitHub Gist. Free
+(personal GitHub API use), opt-in — the app works exactly as before if the
+two secrets below aren't set.
 
 Setup (see README): create a private Gist with one file
 `watchlist_state.json` containing `{}`, note its ID, and a GitHub Personal
@@ -22,10 +23,17 @@ GIST_FILENAME = "watchlist_state.json"
 TIMEOUT = 10
 
 
-def load_watchlist_state(token: str, gist_id: str) -> dict | None:
-    """{"watchlist_order": [...], "pinned_tickers": [...]}, or None on any
-    failure (missing/invalid creds, network error, malformed content, empty
-    file) — callers must fall back to config/watchlist.yaml, never crash."""
+def load_state(token: str, gist_id: str) -> dict | None:
+    """{"active_watchlist": str, "watchlists": {name: {"order": [...],
+    "pinned": [...]}}}, or None on any failure (missing/invalid creds,
+    network error, malformed content, empty file) — callers must fall back
+    to config/watchlist.yaml, never crash.
+
+    Transparently migrates the older single-watchlist schema
+    ({"watchlist_order": [...], "pinned_tickers": [...]}) by folding it into
+    a "Special Watchlist" entry — the gist itself is only rewritten in the
+    new schema on the next save_state() call, not on read.
+    """
     try:
         resp = requests.get(
             f"{GIST_API}/{gist_id}",
@@ -38,23 +46,42 @@ def load_watchlist_state(token: str, gist_id: str) -> dict | None:
         if not content:
             return None
         data = json.loads(content)
-        if not isinstance(data, dict) or "watchlist_order" not in data:
+        if not isinstance(data, dict):
             return None
-        return data
+        if "watchlists" in data:
+            return data if isinstance(data["watchlists"], dict) and data["watchlists"] else None
+        if "watchlist_order" in data:  # old single-watchlist schema
+            return {
+                "active_watchlist": "Special Watchlist",
+                "watchlists": {
+                    "Special Watchlist": {
+                        "order": data["watchlist_order"],
+                        "pinned": data.get("pinned_tickers", []),
+                    }
+                },
+            }
+        return None
     except Exception as exc:
         log.warning("gist_store: load failed: %s", exc)
         return None
 
 
-def save_watchlist_state(token: str, gist_id: str, order: list[str], pinned: list[str]) -> bool:
-    """Overwrite the gist's watchlist_state.json. Returns False on any
-    failure — caller shows a non-blocking warning and keeps going with
-    session state as the source of truth for the rest of that session."""
+def save_state(token: str, gist_id: str, active_watchlist: str, watchlists: dict) -> bool:
+    """Overwrite the gist's watchlist_state.json with every watchlist's
+    order/pins plus which one is active. `watchlists` maps
+    name -> {"order": [...], "pinned": [...]} — the Gist API replaces the
+    whole file content, so a save always writes the complete current state,
+    not just whichever watchlist changed.
+
+    Returns False on any failure — caller shows a non-blocking warning and
+    keeps going with session state as the source of truth for the rest of
+    that session.
+    """
     payload = {
         "files": {
             GIST_FILENAME: {
                 "content": json.dumps(
-                    {"watchlist_order": order, "pinned_tickers": sorted(pinned)}, indent=2
+                    {"active_watchlist": active_watchlist, "watchlists": watchlists}, indent=2
                 )
             }
         }
