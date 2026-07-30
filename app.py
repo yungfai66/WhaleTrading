@@ -335,6 +335,21 @@ st.markdown(
         border-radius: 4px;
         background: #e34948;
     }
+
+    /* Dark mode: the rules above assume a light background and break under
+       Streamlit's default dark theme (#0e1117) — the header band and
+       hover-highlight colors are near-white, making their text unreadable,
+       and the stock background itself reads as harsh near-black. Override
+       with a softer dark palette; Streamlit's own sidebar background
+       (#262730) is untouched since it isn't part of the complaint. */
+    @media (prefers-color-scheme: dark) {
+        .stApp, [data-testid="stHeader"] { background: #16181d; }
+        .st-key-watchlist_table div[data-testid="stHorizontalBlock"] { border-bottom-color: #33363f; }
+        .st-key-watchlist_table div[data-testid="stHorizontalBlock"]:hover { background: #242830; }
+        .st-key-watchlist_table div[data-testid="column"] { border-right-color: #33363f; }
+        .st-key-watchlist_header_row { background: #1f222a; }
+        .wt-bar-track { background: #33363f; }
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -1436,6 +1451,161 @@ def fear_greed_page(cfg) -> None:
     st.caption(caveat)
 
 
+# Static reference diagram for the "How to read this" guide: the buy/sell
+# signal logic (OR of AND-paths) from signals.py, rendered once here rather
+# than regenerated per view. Update this by hand if signals.py's rules change.
+SIGNAL_DIAGRAM_SVG = """
+<div style="max-width:900px;margin:0 auto;">
+<svg viewBox="0 0 900 742" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="dtitle ddesc" style="width:100%;height:auto;display:block;">
+  <title id="dtitle">WhaleTrading buy/sell signal composition</title>
+  <desc id="ddesc">The buy signal is an OR of three AND-conditions (dip reversal, ribbon turn, MACD cross). The sell signal is an OR of two AND-conditions (whale-to-retail shift, yellow candle).</desc>
+  <style>
+    .wtdiag-root {
+      --card-bg: #f3f4f6; --card-border: #d1d5db;
+      --chip-bg: #ffffff; --chip-border: #cbd5e1;
+      --text: #1f2937; --muted: #6b7280;
+      --line: #9ca3af;
+      --buy: #16a34a; --sell: #dc2626;
+      --header-buy: #dcfce7; --header-sell: #fee2e2;
+    }
+    @media (prefers-color-scheme: dark) {
+      .wtdiag-root {
+        --card-bg: #1f2937; --card-border: #374151;
+        --chip-bg: #111827; --chip-border: #374151;
+        --text: #e5e7eb; --muted: #9ca3af;
+        --line: #6b7280;
+        --buy: #22c55e; --sell: #f87171;
+        --header-buy: #14532d; --header-sell: #7f1d1d;
+      }
+    }
+    .wtdiag-root text { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: var(--text); }
+    .wtdiag-root .section { font-size: 15px; font-weight: 600; }
+    .wtdiag-root .legend { font-size: 12px; fill: var(--muted); }
+    .wtdiag-root .cardhdr { font-size: 12px; font-weight: 700; }
+    .wtdiag-root .chip { font-size: 12px; }
+    .wtdiag-root .andlbl { font-size: 10px; fill: var(--muted); font-weight: 600; letter-spacing: 0.5px; }
+    .wtdiag-root .orlbl { font-size: 13px; fill: var(--muted); font-weight: 700; }
+    .wtdiag-root .outlbl { font-size: 15px; font-weight: 700; fill: #fff; }
+    .wtdiag-root .card { fill: var(--card-bg); stroke: var(--card-border); stroke-width: 1; rx: 8; }
+    .wtdiag-root .chipbox { fill: var(--chip-bg); stroke: var(--chip-border); stroke-width: 1; rx: 6; }
+    .wtdiag-root .conn { stroke: var(--line); stroke-width: 1.5; fill: none; }
+    .wtdiag-root .arrow { stroke: var(--line); stroke-width: 1.5; fill: none; marker-end: url(#wtdiag-arrowhead); }
+  </style>
+  <defs>
+    <marker id="wtdiag-arrowhead" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="var(--line)"/>
+    </marker>
+  </defs>
+  <g class="wtdiag-root">
+
+  <text x="450" y="24" text-anchor="middle" class="legend">Green = triggers a buy · Red = triggers a sell · each card's rows are AND'd; cards combine via OR</text>
+
+  <!-- BUY SECTION -->
+  <text x="90" y="52" class="section">BUY signal — fires if ANY of these 3 paths is true</text>
+
+  <!-- Card A: Dip reversal (4 conditions) -->
+  <rect x="90" y="64" width="220" height="210" class="card"/>
+  <rect x="90" y="64" width="220" height="26" fill="var(--header-buy)" rx="8"/>
+  <rect x="90" y="82" width="220" height="8" fill="var(--header-buy)"/>
+  <text x="200" y="81" text-anchor="middle" class="cardhdr">Path 1 — Dip reversal</text>
+  <rect x="102" y="98" width="196" height="32" class="chipbox"/>
+  <text x="200" y="118" text-anchor="middle" class="chip">Up-close candle after a decline</text>
+  <text x="200" y="139" text-anchor="middle" class="andlbl">AND</text>
+  <rect x="102" y="146" width="196" height="32" class="chipbox"/>
+  <text x="200" y="166" text-anchor="middle" class="chip">Ribbon still bearish (downtrend)</text>
+  <text x="200" y="187" text-anchor="middle" class="andlbl">AND</text>
+  <rect x="102" y="194" width="196" height="32" class="chipbox"/>
+  <text x="200" y="214" text-anchor="middle" class="chip">Ribbon tightening (narrowing)</text>
+  <text x="200" y="235" text-anchor="middle" class="andlbl">AND</text>
+  <rect x="102" y="242" width="196" height="26" class="chipbox"/>
+  <text x="200" y="259" text-anchor="middle" class="chip">Whale rising OR retail falling</text>
+
+  <!-- Card B: Ribbon turn (3 conditions) -->
+  <rect x="340" y="64" width="220" height="166" class="card"/>
+  <rect x="340" y="64" width="220" height="26" fill="var(--header-buy)" rx="8"/>
+  <rect x="340" y="82" width="220" height="8" fill="var(--header-buy)"/>
+  <text x="450" y="81" text-anchor="middle" class="cardhdr">Path 2 — Ribbon turn</text>
+  <rect x="352" y="98" width="196" height="32" class="chipbox"/>
+  <text x="450" y="118" text-anchor="middle" class="chip">Up-close candle</text>
+  <text x="450" y="139" text-anchor="middle" class="andlbl">AND</text>
+  <rect x="352" y="146" width="196" height="32" class="chipbox"/>
+  <text x="450" y="163" text-anchor="middle" class="chip">Ribbon just turned bullish</text>
+  <text x="450" y="176" text-anchor="middle" class="chip" font-size="10">("red ribbon forming")</text>
+  <text x="450" y="195" text-anchor="middle" class="andlbl">AND</text>
+  <rect x="352" y="200" width="196" height="26" class="chipbox"/>
+  <text x="450" y="217" text-anchor="middle" class="chip">Whale rising OR retail falling</text>
+
+  <!-- Card C: MACD cross (2 conditions) -->
+  <rect x="590" y="64" width="220" height="122" class="card"/>
+  <rect x="590" y="64" width="220" height="26" fill="var(--header-buy)" rx="8"/>
+  <rect x="590" y="82" width="220" height="8" fill="var(--header-buy)"/>
+  <text x="700" y="81" text-anchor="middle" class="cardhdr">Path 3 — MACD cross</text>
+  <rect x="602" y="98" width="196" height="32" class="chipbox"/>
+  <text x="700" y="118" text-anchor="middle" class="chip">MACD golden cross</text>
+  <text x="700" y="139" text-anchor="middle" class="andlbl">AND</text>
+  <rect x="602" y="146" width="196" height="32" class="chipbox"/>
+  <text x="700" y="166" text-anchor="middle" class="chip">Whale score rising</text>
+
+  <!-- Converge to OR -->
+  <path d="M200,274 L200,290" class="conn"/>
+  <path d="M450,230 L450,290" class="conn"/>
+  <path d="M700,186 L700,290" class="conn"/>
+  <path d="M200,290 L700,290" class="conn"/>
+  <text x="450" y="303" text-anchor="middle" class="orlbl">OR</text>
+  <path d="M450,290 L450,320" class="arrow"/>
+
+  <rect x="350" y="322" width="200" height="42" rx="8" fill="var(--buy)"/>
+  <text x="450" y="349" text-anchor="middle" class="outlbl">BUY signal</text>
+
+  <!-- divider -->
+  <line x1="60" y1="392" x2="840" y2="392" stroke="var(--card-border)" stroke-width="1"/>
+
+  <!-- SELL SECTION -->
+  <text x="90" y="420" class="section">SELL / trim signal — fires if EITHER of these 2 paths is true</text>
+
+  <!-- Card D: whale-&gt;retail shift (3 conditions) -->
+  <rect x="215" y="432" width="220" height="166" class="card"/>
+  <rect x="215" y="432" width="220" height="26" fill="var(--header-sell)" rx="8"/>
+  <rect x="215" y="450" width="220" height="8" fill="var(--header-sell)"/>
+  <text x="325" y="449" text-anchor="middle" class="cardhdr">Path 1 — Whale→retail shift</text>
+  <rect x="227" y="466" width="196" height="32" class="chipbox"/>
+  <text x="325" y="486" text-anchor="middle" class="chip">Whale score falling</text>
+  <text x="325" y="507" text-anchor="middle" class="andlbl">AND</text>
+  <rect x="227" y="514" width="196" height="32" class="chipbox"/>
+  <text x="325" y="534" text-anchor="middle" class="chip">Retail score rising</text>
+  <text x="325" y="555" text-anchor="middle" class="andlbl">AND</text>
+  <rect x="227" y="562" width="196" height="26" class="chipbox"/>
+  <text x="325" y="579" text-anchor="middle" class="chip">Ribbon still bullish</text>
+
+  <!-- Card E: yellow candle (2 conditions) -->
+  <rect x="465" y="432" width="220" height="122" class="card"/>
+  <rect x="465" y="432" width="220" height="26" fill="var(--header-sell)" rx="8"/>
+  <rect x="465" y="450" width="220" height="8" fill="var(--header-sell)"/>
+  <text x="575" y="449" text-anchor="middle" class="cardhdr">Path 2 — Yellow candle</text>
+  <rect x="477" y="466" width="196" height="32" class="chipbox"/>
+  <text x="575" y="486" text-anchor="middle" class="chip">Down-close candle after a rally</text>
+  <text x="575" y="507" text-anchor="middle" class="andlbl">AND</text>
+  <rect x="477" y="514" width="196" height="32" class="chipbox"/>
+  <text x="575" y="534" text-anchor="middle" class="chip">Whale score falling</text>
+
+  <!-- Converge to OR -->
+  <path d="M325,598 L325,614" class="conn"/>
+  <path d="M575,554 L575,614" class="conn"/>
+  <path d="M325,614 L575,614" class="conn"/>
+  <text x="450" y="627" text-anchor="middle" class="orlbl">OR</text>
+  <path d="M450,614 L450,644" class="arrow"/>
+
+  <rect x="350" y="646" width="200" height="42" rx="8" fill="var(--sell)"/>
+  <text x="450" y="673" text-anchor="middle" class="outlbl">SELL / trim signal</text>
+
+  <text x="450" y="712" text-anchor="middle" class="legend">"Whale rising/falling" and "retail rising/falling" = 3-bar score delta beyond a ±2-point threshold (steady otherwise).</text>
+  <text x="450" y="730" text-anchor="middle" class="legend">A ticker can show BOTH a buy and a sell in the same week if unrelated paths on each side happen to fire together.</text>
+  </g>
+</svg>
+</div>
+"""
+
+
 def guide_page(demo_mode: bool) -> None:
     _freshness_section(demo_mode)
     st.divider()
@@ -1491,6 +1661,14 @@ the whale score to be rising):
   a pattern often seen near a price peak
 - a weak candle forms (price closes near its low) while the whale score is falling
 
+Each bullet above is its own independent path — **any one** firing is enough
+to trigger the signal, but every condition *within* a path has to line up at
+the same time. The diagram below shows the full logic:
+"""
+    )
+    st.markdown(SIGNAL_DIAGRAM_SVG, unsafe_allow_html=True)
+    st.markdown(
+        """
 **The whale-score zones** (thresholds configurable per stock): below 35 =
 weak, above 35 = momentum, above 50 = rise, above 75 = soar.
 

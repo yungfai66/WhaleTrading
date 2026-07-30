@@ -72,7 +72,6 @@ watchlists:
     - TSLL
     - ARKG
     - MSTX
-    - SMLR
     - MARA
     - CLSK
     - KULR
@@ -147,7 +146,6 @@ watchlists:
     - ADBE
     - CRM
     - ETSY
-    - TTCF
     - ABNB
     - BYND
     - SNOW
@@ -207,7 +205,6 @@ watchlists:
     - PATH
     - XYZ
     - ZM
-    - EXAS
     - TWLO
     - SPOT
     - NTLA
@@ -233,7 +230,6 @@ watchlists:
     - CRSP
     - EDIT
     - PACB
-    - NVTA
     - ARKG
 
 # Whale-accumulation thresholds (score 0-100).
