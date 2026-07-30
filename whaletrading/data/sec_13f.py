@@ -135,6 +135,13 @@ def _parse_info_table(xml_text: str) -> list[dict]:
     # Strip namespaces so tag lookups are simple across filer variations.
     xml_text = re.sub(r'xmlns(:\w+)?="[^"]+"', "", xml_text)
     xml_text = re.sub(r"<(/?)\w+:", r"<\1", xml_text)
+    # Some filers (e.g. BlackRock, T. Rowe Price) also declare a prefixed
+    # attribute on the root element, most commonly xsi:schemaLocation="...".
+    # Stripping its xmlns:xsi declaration above leaves that attribute's
+    # prefix unbound, which ElementTree rejects outright ("unbound prefix").
+    # The two regexes above only strip prefixes on element tags; this one
+    # covers the attribute-name case.
+    xml_text = re.sub(r"(\s)\w+:(\w+=)", r"\1\2", xml_text)
     root = ET.fromstring(xml_text)
     holdings = []
     for entry in root.iter("infoTable"):
