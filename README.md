@@ -10,6 +10,10 @@ Streamlit dashboard:
    the strategy's 35 / 50 / 75 threshold guides
 4. **MACD** — 12/26/9 with golden/death crosses
 
+There's also a market-wide **😱 Fear & Greed Index** page — a contrarian
+sentiment gauge modeled on CNN's, computed from free data. See
+[Market sentiment](#market-sentiment--the-fear--greed-index) below.
+
 ## The honest disclaimer, first
 
 **No public feed labels a trade "institutional."** Brokers (including IBKR) and
@@ -176,11 +180,47 @@ the inherent delays are worth internalizing:
 | FINRA daily short volume | Today's off-exchange trading | Same evening (~6pm ET) | Hours–1 day |
 | FINRA ATS weekly | One week of dark-pool volume | 2 weeks later (4 for smaller stocks) | 2–5 weeks |
 | SEC 13F holdings | Quarter-end positions | Up to 45 days after quarter end | 45–135 days |
+| Fear & Greed inputs (Yahoo) | Today's market-wide sentiment | Same cadence as prices | Hours |
 
 So: the whale score's fast components (volume classification, daily dark-pool
 pressure) are **at most a day old**, while the 13F layer is **a quarter old by
 design** — that's why it carries the smallest weight. Treat any signal as
 end-of-day/weekly information, not intraday timing.
+
+## Market sentiment — the Fear & Greed Index
+
+A market-wide, contrarian sentiment gauge on its own page (**😱 Fear & Greed**
+in the left panel), modeled on
+[CNN's Fear & Greed Index](https://edition.cnn.com/markets/fear-and-greed) —
+not specific to any one stock, and not scraped from CNN. It's computed the
+same way the whale score is: free Yahoo Finance data, six 0–100 sub-scores
+(50 = neutral) averaged into one composite. CNN uses seven indicators; this
+app matches six with a documented proxy and openly omits the seventh:
+
+| Indicator | This app's proxy | Symbols | vs. CNN |
+|---|---|---|---|
+| Market Momentum | S&P 500 vs. its 125-day average | `^GSPC` | Same idea |
+| Market Volatility | VIX vs. its 50-day average (inverted — a calm VIX = greed) | `^VIX` | Same idea |
+| Safe Haven Demand | SPY 20-day return minus TLT 20-day return | `SPY`, `TLT` | Same idea |
+| Junk Bond Demand | HYG 20-day return minus LQD 20-day return | `HYG`, `LQD` | ETF total-return divergence stands in for the real high-yield/investment-grade spread |
+| Stock Price Strength | Share of a fixed ~40-stock large-cap basket near its 52-week high minus the share near its 52-week low | large-cap basket | Basket proxy, not full NYSE new-highs/lows |
+| Stock Price Breadth | McClellan-style summation of net advancing volume across the same basket | large-cap basket | Basket proxy, not full NYSE advance/decline volume |
+| Put/Call Options | **Omitted** | — | No free daily put/call history exists |
+
+Each raw signal is z-scored against its own trailing ~1-year history, then
+squashed to 0–100 with the same tanh normalization the whale score uses. The
+composite is the mean of whatever indicators are available that day — if a
+symbol fails to fetch, that indicator drops out and the rest renormalize,
+same fail-open behavior as the whale score. The page shows the current
+gauge, the label band (Extreme Fear · Fear · Neutral · Greed · Extreme
+Greed), prior readings (previous close, 1 week/month/year ago), a 1-year
+history chart, and a card per indicator — plus a chip next to the app title
+on every page so the reading is always visible. It refreshes with the same
+🔄 Refresh data button as everything else (see `whaletrading/indicators/fear_greed.py`).
+
+This is a directional, contrarian tool, not a buy/sell signal for any
+individual stock — treat it as context alongside the whale-score verdicts,
+not a replacement for them.
 
 ## Getting fresher data — free and minimum-cost upgrades
 
@@ -213,6 +253,7 @@ whaletrading/
   data/demo.py               synthetic fixtures for demo mode
   data/store.py              SQLite cache (data/whaletrading.db)
   indicators/                ribbon, MACD, candles, whale_score composite
+  indicators/fear_greed.py   market-wide Fear & Greed composite
   signals.py                 buy/sell rules
   pipeline.py                fetch → compute → persist (graceful degradation)
 app.py                       Streamlit dashboard

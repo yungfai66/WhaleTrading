@@ -23,6 +23,7 @@ from whaletrading.config import load_config
 from whaletrading.data import gist_store
 from whaletrading.data import prices as prices_mod
 from whaletrading.data import store
+from whaletrading.indicators import fear_greed
 from whaletrading.pipeline import refresh_all
 
 # Streamlit Cloud secrets don't auto-populate os.environ — bridge the ones we
@@ -89,6 +90,11 @@ SOURCE_INFO = {
         "delay": "Quarterly; filed up to 45 days after quarter end — positions are 45–135 days old",
         "stale_after": 140,
     },
+    "sentiment": {
+        "name": "Market Fear & Greed inputs (Yahoo Finance)",
+        "delay": "End of day — same cadence as prices",
+        "stale_after": 5,
+    },
 }
 
 # Date-range presets for the ticker detail chart: label -> calendar days back
@@ -100,8 +106,12 @@ RANGE_PRESETS = {
 DEFAULT_RANGE = {"D": "1Y", "W": "2Y", "M": "All"}
 
 # Left-panel nav: key -> button label. Order here is the order they render in.
+# Labels are kept short (full names, if any, live in the page itself) so
+# they never wrap inside the nav button, even with the sidebar dragged
+# narrower than its default width.
 PAGES = {
-    "overview": "📊 Watchlist Overview",
+    "overview": "📊 Watchlist",
+    "feargreed": "😱 Fear & Greed",
     "detail": "📈 Ticker detail",
     "guide": "📖 How to read this",
 }
@@ -174,14 +184,12 @@ def _format_singapore(iso_ts: str | None) -> str:
 
 st.set_page_config(page_title="WhaleTrading", page_icon="🐋", layout="wide")
 
-# Narrow default sidebar width (Streamlit's default is ~336px). The sidebar
-# only holds the refresh button + a config hint, so it doesn't need the
-# space the main charts do. Users can still drag it wider if they want —
-# this only changes the default.
-#
-# Also trims Streamlit's large default top padding and divider margins,
-# which otherwise stack up into a noticeable gap between the title and the
-# "Watchlist overview" section below the nav row.
+# Sidebar gets a minimum width wide enough for its longest nav label
+# ("😱 Fear & Greed") so it never wraps at the default drag position —
+# still user-resizable, this only sets the floor. Also trims Streamlit's
+# large default top padding and divider margins, which otherwise stack up
+# into a noticeable gap between the title and the "Watchlist" section below
+# the nav row.
 st.markdown(
     """
     <style>
@@ -198,7 +206,25 @@ st.markdown(
     h1, h2, h3 { margin-top: 0.2rem !important; margin-bottom: 0.3rem !important; }
     div[data-testid="stRadio"] > label { margin-bottom: 0.1rem !important; }
     div[data-testid="stRadio"] div[role="radiogroup"] { gap: 0.4rem !important; }
-    .stButton button { padding: 0.25rem 0.75rem !important; }
+
+    /* Taller tap target, less horizontal padding stealing label width — the
+       watchlist-table and sidebar-nav rules below tighten padding further
+       still, this is just the app-wide floor. */
+    .stButton button { padding: 0.3rem 0.6rem !important; line-height: 1.2 !important; }
+
+    /* Sidebar: nav-button labels never wrap — ellipsis instead — and read
+       left-aligned like a nav list rather than centered like an action
+       button. min-width keeps the default sidebar width wide enough for
+       the longest label; users can still drag it narrower or wider. */
+    section[data-testid="stSidebar"] { min-width: 230px; }
+    section[data-testid="stSidebar"] .stButton button {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        justify-content: flex-start;
+        text-align: left;
+        display: block;
+    }
 
     /* Ticker + bar-size controls nested under the "Ticker detail" nav
        button in the left panel — indented so they read as sub-controls. */
@@ -207,20 +233,64 @@ st.markdown(
     /* Watchlist table: bordered cells, minimal row/column spacing. Scoped
        to this one container (Streamlit stamps a stable st-key-<key> class
        via st.container(key=...)) so it doesn't affect other tables/columns
-       elsewhere in the app. */
+       elsewhere in the app. font-variant-numeric keeps digits a fixed width
+       so Close/Whale/Δ20d/Retail line up column-wise instead of drifting. */
+    .st-key-watchlist_table { font-variant-numeric: tabular-nums; }
     .st-key-watchlist_table div[data-testid="stHorizontalBlock"] {
         border-bottom: 1px solid #e1e0d9;
         gap: 0.3rem !important;
+    }
+    .st-key-watchlist_table div[data-testid="stHorizontalBlock"]:hover {
+        background: #f7f6f2;
     }
     .st-key-watchlist_table div[data-testid="column"] {
         border-right: 1px solid #e1e0d9;
         padding: 0.05rem 0.4rem !important;
     }
     .st-key-watchlist_table div[data-testid="column"]:last-child { border-right: none; }
+    /* Close / Whale / Δ20d / Retail — right-align the plain-text data
+       cells (header buttons keep their own centered layout, unaffected by
+       a parent text-align). */
+    .st-key-watchlist_table div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(6),
+    .st-key-watchlist_table div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(7),
+    .st-key-watchlist_table div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(8),
+    .st-key-watchlist_table div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(9) {
+        text-align: right;
+    }
+    /* Header row: tinted band so it reads as a header, not just another row. */
+    .st-key-watchlist_header_row { background: #f4f3ef; border-radius: 4px 4px 0 0; }
+    /* Header/data buttons: never wrap, ellipsis instead, tight padding, and
+       a font size that tracks viewport width — the original bug (a full
+       column-width label + sort arrow at a fixed 0.78rem font wrapped to
+       two lines and broke row alignment). */
     .st-key-watchlist_table .stButton button {
-        padding: 0.05rem 0.4rem !important;
-        font-size: 0.78rem !important;
+        padding: 0.05rem 0.3rem !important;
+        font-size: clamp(0.68rem, 0.78vw, 0.82rem) !important;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
         width: 100%;
+    }
+
+    /* Watchlist % bar (Whale column) — a real filled track, not the old
+       ▓░ ASCII characters, so it renders as a bar at any font/zoom. */
+    .wt-bar-track {
+        position: relative;
+        display: inline-block;
+        width: 60px;
+        height: 8px;
+        background: #e1e0d9;
+        border-radius: 4px;
+        vertical-align: middle;
+        margin-right: 0.4rem;
+    }
+    .wt-bar-fill {
+        position: absolute;
+        left: 0;
+        top: 0;
+        height: 100%;
+        border-radius: 4px;
+        background: #e34948;
     }
     </style>
     """,
@@ -370,6 +440,42 @@ def load_overview(watchlist: tuple[str, ...]) -> pd.DataFrame:
         )
     conn.close()
     return pd.DataFrame(rows)
+
+
+@st.cache_data(ttl=300)
+def load_sentiment() -> pd.DataFrame:
+    """Fear & Greed history: date index, one score column per indicator plus
+    'composite'. Empty (no columns) if nothing's been refreshed yet."""
+    conn = store.connect()
+    df = store.load_sentiment(conn)
+    conn.close()
+    return df
+
+
+@st.cache_data(ttl=300)
+def load_sentiment_raw() -> pd.DataFrame:
+    """Same shape as load_sentiment but the underlying raw signal values —
+    shown as each indicator card's subtitle."""
+    conn = store.connect()
+    df = store.load_sentiment_raw(conn)
+    conn.close()
+    return df
+
+
+# Band name -> color, reusing the existing palette so the meaning matches
+# the rest of the app: red = bearish/fear (C['sell']/C['down']), green =
+# bullish/greed (C['up']/C['buy']), gray = neutral.
+FG_BAND_COLORS = {
+    "Extreme Fear": C["sell"],
+    "Fear": C["down"],
+    "Neutral": C["neutral"],
+    "Greed": C["up"],
+    "Extreme Greed": C["buy"],
+}
+
+# Position-based lookback for "prior readings" (trading days back from the
+# latest row) — same idiom as the Δ 20d column (metrics.iloc[-21] above).
+PRIOR_READINGS = [("Previous close", 1), ("1 week ago", 5), ("1 month ago", 21), ("1 year ago", 252)]
 
 
 # Shown as a native Plotly hover tooltip on each panel's title (see
@@ -854,20 +960,31 @@ def _watchlist_edit_ui(cfg, working: list[str], pinned: set[str]) -> None:
 # Column key -> (header label, tooltip, dataframe field to sort by). Pin and
 # the chart-link column aren't sortable (no dataframe field), so they render
 # as plain labels rather than clickable header buttons.
+#
+# Labels are kept short — the full meaning lives in the tooltip (`help=` on
+# the header button), not the label itself. A full-length label ("Retail %")
+# in a narrow column at a fixed font size used to wrap to two lines and
+# break row alignment; short labels + the nowrap/ellipsis CSS above make
+# that impossible even at the narrowest realistic column width.
 TABLE_COLUMNS = [
     ("pin", "📌", "Pinned in Edit mode — always sorted to the top, regardless of other sorting. Click to sort.", "_pinned"),
     ("ticker", "Ticker", "The stock symbol. Click to sort.", "Ticker"),
     ("company", "Company", "Company / issuer name. Click to sort.", "Company"),
     ("action", "Action", "🟢 Buy · 🟠 Trim · 🟡 Watch · 🔵 Hold · ⚪ Wait — see legend above. Click to sort.", "_sort"),
-    ("signal", "Signal", "🔴/🟢 = a buy/sell signal fired this week (hover for detail). Click to sort.", "_has_signal"),
+    ("signal", "Sig", "Signal — 🔴/🟢 = a buy/sell signal fired this week (hover for detail). Click to sort.", "_has_signal"),
     ("close", "Close", "Last COMPLETED daily close (not a live quote). Click to sort.", "Close"),
-    ("whale", "Whale %", "0-100 estimate of big-investor buying. 50 = neutral. Click to sort.", "Whale %"),
-    ("delta", "Δ 20d", "Change in Whale % over ~20 trading days. Click to sort.", "Δ 20d"),
-    ("retail", "Retail %", "0-100 estimate of regular/individual-investor buying. Click to sort.", "Retail %"),
+    ("whale", "Whale", "Whale % — 0-100 estimate of big-investor buying. 50 = neutral. Click to sort.", "Whale %"),
+    ("delta", "Δ20d", "Change in Whale % over ~20 trading days. Click to sort.", "Δ 20d"),
+    ("retail", "Retail", "Retail % — 0-100 estimate of regular/individual-investor buying. Click to sort.", "Retail %"),
     ("zone", "Zone", "weak <35 · momentum 35-50 · rise 50-75 · soar >75. Click to sort.", "_zone_rank"),
     ("chart", "📈", "Open this stock's full chart.", None),
 ]
-ROW_COLS = [0.3, 0.6, 1.1, 0.75, 0.45, 0.65, 1.4, 0.6, 0.7, 0.75, 0.4]
+# Widths roughly proportional to what each column actually needs: icon-only
+# columns (pin, chart) are narrow, Company/Whale (bar + number) get the most
+# room. Sums to a set of fractions, not pixels — Streamlit distributes the
+# row's actual width across them, and the CSS above ellipses any label that
+# still doesn't fit rather than wrapping it.
+ROW_COLS = [0.3, 0.55, 1.3, 0.8, 0.4, 0.65, 1.3, 0.55, 0.65, 0.7, 0.35]
 
 
 def _cycle_sort(col_key: str) -> None:
@@ -935,16 +1052,17 @@ def overview_page(cfg):
         # internally the way a data-grid does. Wrapped in a keyed container
         # so the scoped CSS above can add cell borders + compact spacing.
         with st.container(key="watchlist_table"):
-            hdr = st.columns(ROW_COLS, gap="small")
-            for c, (col_key, label, tip, sort_field) in zip(hdr, TABLE_COLUMNS):
-                if sort_field is None:
-                    c.markdown(f'<span title="{html.escape(tip)}" style="font-size:0.78rem;color:#898781;">{label}</span>', unsafe_allow_html=True)
-                else:
-                    arrow = ""
-                    if sort_state and sort_state[0] == col_key:
-                        arrow = " ▲" if sort_state[1] else " ▼"
-                    if c.button(label + arrow, key=f"hdr_{col_key}", help=tip, use_container_width=True):
-                        _cycle_sort(col_key)
+            with st.container(key="watchlist_header_row"):
+                hdr = st.columns(ROW_COLS, gap="small")
+                for c, (col_key, label, tip, sort_field) in zip(hdr, TABLE_COLUMNS):
+                    if sort_field is None:
+                        c.markdown(f'<span title="{html.escape(tip)}" style="font-size:0.78rem;color:#898781;">{label}</span>', unsafe_allow_html=True)
+                    else:
+                        arrow = ""
+                        if sort_state and sort_state[0] == col_key:
+                            arrow = " ▲" if sort_state[1] else " ▼"
+                        if c.button(label + arrow, key=f"hdr_{col_key}", help=tip, use_container_width=True):
+                            _cycle_sort(col_key)
             for _, r in display.iterrows():
                 cells = st.columns(ROW_COLS, gap="small")
                 cells[0].write("📌" if r["_pinned"] else "")
@@ -961,11 +1079,17 @@ def overview_page(cfg):
                     cells[4].write("—")
                 cells[5].write(f"{r['Close']:,.2f}")
                 wv = float(r["Whale %"])
-                filled = int(round(wv / 10))
-                bar = "▓" * filled + "░" * (10 - filled)
-                cells[6].markdown(f"`{bar}` {wv:.1f}")
+                pct = max(0.0, min(100.0, wv))
+                cells[6].markdown(
+                    f'<span class="wt-bar-track"><span class="wt-bar-fill" style="width:{pct:.0f}%;"></span></span>{wv:.1f}',
+                    unsafe_allow_html=True,
+                )
                 d20 = r["Δ 20d"]
-                cells[7].write("—" if d20 is None or pd.isna(d20) else f"{d20:+.1f}")
+                if d20 is None or pd.isna(d20):
+                    cells[7].write("—")
+                else:
+                    delta_color = C["up"] if d20 >= 0 else C["down"]
+                    cells[7].markdown(f'<span style="color:{delta_color};">{d20:+.1f}</span>', unsafe_allow_html=True)
                 cells[8].write(f"{float(r['Retail %']):.1f}")
                 cells[9].write(r["Zone"])
                 if cells[10].button("📈", key=f"chart_{r['Ticker']}", help=f"Open {r['Ticker']}'s chart"):
@@ -1004,6 +1128,197 @@ def verdict_banner(ticker: str, thr: dict) -> None:
         )
     if caption_bits:
         st.caption("  \n".join(caption_bits))
+
+
+def _fg_chip_html() -> str:
+    """Small band-colored pill next to the page title — e.g. "😱 62 · Greed"
+    — so the market-wide reading is visible from every page, not just the
+    Fear & Greed page itself. Empty string (renders nothing) until the
+    first refresh has populated the sentiment table."""
+    scores = load_sentiment()
+    if scores.empty or "composite" not in scores.columns:
+        return ""
+    composite = scores["composite"].dropna()
+    if composite.empty:
+        return ""
+    val = float(composite.iloc[-1])
+    band = fear_greed.label(val)
+    color = FG_BAND_COLORS[band]
+    return (
+        f'<span title="Market Fear &amp; Greed Index — {html.escape(band)}, '
+        f'updated {composite.index[-1]:%Y-%m-%d}. See the 😱 Fear &amp; Greed '
+        f'page in the left panel." '
+        f'style="cursor:help;font-size:0.8rem;font-weight:600;padding:0.15rem 0.6rem;'
+        f'border-radius:999px;background:{color};color:#fff;margin-left:0.6rem;'
+        f'vertical-align:middle;">😱 {val:.0f} · {html.escape(band)}</span>'
+    )
+
+
+def _fg_gauge_figure(score: float) -> go.Figure:
+    steps = [
+        {"range": [lo, min(hi, 100)], "color": FG_BAND_COLORS[name]}
+        for lo, hi, name in fear_greed.FG_BANDS
+    ]
+    fig = go.Figure(
+        go.Indicator(
+            mode="gauge+number",
+            value=score,
+            number={"font": {"size": 38, "color": C["ink"]}},
+            gauge={
+                "axis": {"range": [0, 100], "tickcolor": C["muted"], "tickfont": {"size": 9}},
+                "bar": {"color": C["ink"], "thickness": 0.22},
+                "bgcolor": C["surface"],
+                "borderwidth": 0,
+                "steps": steps,
+            },
+        )
+    )
+    fig.update_layout(
+        height=230,
+        margin=dict(l=25, r=25, t=25, b=5),
+        paper_bgcolor=C["surface"],
+        font=dict(color=C["ink"], family="sans-serif"),
+    )
+    return fig
+
+
+def _fg_history_figure(composite: pd.Series) -> go.Figure:
+    hist = composite.tail(252)
+    fig = go.Figure()
+    for lo, hi, name in fear_greed.FG_BANDS:
+        fig.add_hrect(y0=lo, y1=min(hi, 100), fillcolor=FG_BAND_COLORS[name], opacity=0.10, line_width=0)
+    fig.add_trace(
+        go.Scatter(
+            x=hist.index, y=hist.values, mode="lines",
+            line=dict(color=C["ink"], width=1.6), hovertemplate="%{y:.0f}<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        height=230,
+        margin=dict(l=35, r=15, t=10, b=25),
+        paper_bgcolor=C["surface"],
+        plot_bgcolor=C["surface"],
+        font=dict(color=C["ink2"], size=10),
+        yaxis=dict(range=[0, 100], gridcolor=C["grid"]),
+        xaxis=dict(gridcolor=C["grid"]),
+        showlegend=False,
+    )
+    return fig
+
+
+def _fg_sparkline_figure(series: pd.Series, color: str) -> go.Figure:
+    hist = series.dropna().tail(90)
+    fig = go.Figure(
+        go.Scatter(x=hist.index, y=hist.values, mode="lines", line=dict(color=color, width=1.5))
+    )
+    fig.update_layout(
+        height=64,
+        margin=dict(l=0, r=0, t=2, b=2),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(visible=False),
+        yaxis=dict(visible=False),
+        showlegend=False,
+    )
+    return fig
+
+
+def _fg_empty_state() -> None:
+    st.warning(
+        "No sentiment data cached yet. Click 🔄 Refresh data in the left panel — "
+        "the first refresh fetches ~46 symbols (index/ETF proxies + a large-cap "
+        "basket) and can take a little longer than a normal refresh."
+    )
+
+
+def fear_greed_page(cfg) -> None:
+    """Market-wide sentiment gauge modeled on CNN's Fear & Greed Index
+    (edition.cnn.com/markets/fear-and-greed), computed from free Yahoo data —
+    see whaletrading/indicators/fear_greed.py for the full methodology and
+    what's a documented proxy vs. an exact match."""
+    st.subheader("😱 Fear & Greed Index")
+    st.caption(
+        "A market-wide, contrarian sentiment gauge — not a buy/sell signal for "
+        "any one stock. Extreme fear has historically been a buying "
+        "opportunity; extreme greed, a warning sign. Modeled on CNN's Fear & "
+        "Greed Index using 6 of its 7 indicators (Put/Call options demand has "
+        "no free daily data source, so it's omitted)."
+    )
+
+    scores = load_sentiment()
+    if scores.empty or "composite" not in scores.columns:
+        _fg_empty_state()
+        return
+    composite = scores["composite"].dropna()
+    if composite.empty:
+        _fg_empty_state()
+        return
+
+    if cfg.demo_mode:
+        st.info("🎭 Demo mode — this sentiment history is synthetic, not a real market reading.")
+
+    latest = float(composite.iloc[-1])
+    latest_band = fear_greed.label(latest)
+
+    left, right = st.columns([1, 1.5], gap="large")
+    with left:
+        st.plotly_chart(
+            _fg_gauge_figure(latest), use_container_width=True,
+            config={"displayModeBar": False},
+        )
+        st.markdown(
+            f'<div style="text-align:center;font-size:1.35rem;font-weight:700;'
+            f'color:{FG_BAND_COLORS[latest_band]};">{latest_band}</div>',
+            unsafe_allow_html=True,
+        )
+        st.caption(f"As of {composite.index[-1]:%Y-%m-%d} · updates with 🔄 Refresh data")
+    with right:
+        cols = st.columns(4, gap="small")
+        for col, (readable, offset) in zip(cols, PRIOR_READINGS):
+            val = None if len(composite) <= offset else float(composite.iloc[-1 - offset])
+            if val is None:
+                col.metric(readable, "—")
+            else:
+                col.metric(readable, f"{val:.0f}", help=fear_greed.label(val))
+        st.plotly_chart(
+            _fg_history_figure(composite), use_container_width=True,
+            config={"displayModeBar": False},
+        )
+
+    st.divider()
+    st.markdown("##### What's driving it")
+    available = [k for k in fear_greed.INDICATOR_INFO if k in scores.columns and not scores[k].dropna().empty]
+    for row_start in range(0, len(available), 3):
+        row_cols = st.columns(3, gap="medium")
+        for col, key in zip(row_cols, available[row_start : row_start + 3]):
+            series = scores[key].dropna()
+            name, desc = fear_greed.INDICATOR_INFO[key]
+            val = float(series.iloc[-1])
+            band = fear_greed.label(val)
+            color = FG_BAND_COLORS[band]
+            with col.container(border=True):
+                st.markdown(f"**{name}**")
+                st.markdown(
+                    f'<span style="font-size:1.3rem;font-weight:700;color:{color};">{val:.0f}</span> '
+                    f'<span style="color:{color};font-weight:600;">{band}</span>',
+                    unsafe_allow_html=True,
+                )
+                st.caption(desc)
+                st.plotly_chart(
+                    _fg_sparkline_figure(series, color), use_container_width=True,
+                    config={"displayModeBar": False},
+                )
+    missing = [name for key, (name, _) in fear_greed.INDICATOR_INFO.items() if key not in available]
+    caveat = (
+        "⚠️ Strength and Breadth are computed from a fixed ~40-stock large-cap "
+        "basket, not full NYSE breadth — a documented proxy, not an exact "
+        "match to CNN's numbers. Put/Call options demand is omitted entirely "
+        "(no free daily data source). Treat this as directional context, not "
+        "a precise reading."
+    )
+    if missing:
+        caveat += " Currently missing (source unavailable this refresh): " + ", ".join(missing) + "."
+    st.caption(caveat)
 
 
 def guide_page(demo_mode: bool) -> None:
@@ -1089,6 +1404,18 @@ momentum/rise/soar zone thresholds.
 
 **Panel 4 — Volume:** how many shares traded each period, colored to match
 the trend ribbon.
+
+---
+
+**😱 Fear & Greed Index** (separate page, left panel) — a market-wide
+gauge, not specific to any one stock. It's a **contrarian** tool: historically,
+extreme fear has been a better time to buy than extreme greed, roughly the
+opposite of how it feels in the moment. It's built the same way as the whale
+score — free data, six weighted indicators averaged into one 0-100 number
+(50 = neutral) — modeled on CNN's well-known Fear & Greed Index. Use it as
+background context for the signals above, not as a signal of its own: a 🟢
+Buy during Extreme Fear carries more weight than the same 🟢 Buy during
+Extreme Greed.
 
 ⚠️ *These are estimates built from free public data (FINRA off-exchange
 trading volume, SEC 13F filings, price/volume patterns) — no public data
@@ -1350,7 +1677,7 @@ def main():
             st.session_state["current_page"] = pending_page
             st.rerun()
 
-    st.markdown("### 🐋 WhaleTrading")
+    st.markdown(f"### 🐋 WhaleTrading{_fg_chip_html()}", unsafe_allow_html=True)
     st.caption(
         "Institutional (whale) accumulation tracker on free data. See 📖 How "
         "to read this in the left panel for data freshness and a plain-"
@@ -1375,6 +1702,8 @@ def main():
     page = st.session_state["current_page"]
     if page == "overview":
         overview_page(cfg)
+    elif page == "feargreed":
+        fear_greed_page(cfg)
     elif page == "detail":
         if ticker:
             detail_page(cfg, ticker, timeframe)

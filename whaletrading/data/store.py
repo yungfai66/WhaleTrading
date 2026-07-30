@@ -48,6 +48,13 @@ CREATE TABLE IF NOT EXISTS metrics (
     components TEXT,               -- JSON breakdown of the composite
     PRIMARY KEY (ticker, date)
 );
+CREATE TABLE IF NOT EXISTS sentiment (
+    date TEXT NOT NULL,
+    indicator TEXT NOT NULL,   -- 'composite' | 'momentum' | 'volatility' | 'strength' | 'breadth' | 'safe_haven' | 'junk_bond'
+    score REAL,                -- 0-100, 50 = neutral
+    raw REAL,                  -- underlying signal value (None for 'composite')
+    PRIMARY KEY (date, indicator)
+);
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT
@@ -126,6 +133,26 @@ def load_metrics(conn: sqlite3.Connection, ticker: str) -> pd.DataFrame:
     return df
 
 
+def load_sentiment(conn: sqlite3.Connection) -> pd.DataFrame:
+    """Fear & Greed history, wide: date index, one 'score' column per
+    indicator plus 'composite', e.g. df['composite'], df['momentum']."""
+    df = read_df(conn, "SELECT date, indicator, score FROM sentiment ORDER BY date")
+    if df.empty:
+        return df
+    df["date"] = pd.to_datetime(df["date"])
+    return df.pivot(index="date", columns="indicator", values="score")
+
+
+def load_sentiment_raw(conn: sqlite3.Connection) -> pd.DataFrame:
+    """Same shape as load_sentiment but the underlying raw signal values —
+    used as the small subtitle on each indicator card."""
+    df = read_df(conn, "SELECT date, indicator, raw FROM sentiment ORDER BY date")
+    if df.empty:
+        return df
+    df["date"] = pd.to_datetime(df["date"])
+    return df.pivot(index="date", columns="indicator", values="raw")
+
+
 def set_meta(conn: sqlite3.Connection, key: str, value) -> None:
     with conn:
         conn.execute(
@@ -154,5 +181,6 @@ def source_freshness(conn: sqlite3.Connection) -> dict[str, str | None]:
         "short_volume": "SELECT MAX(date) FROM short_volume",
         "ats_weekly": "SELECT MAX(week_start) FROM ats_weekly",
         "inst_13f": "SELECT MAX(report_period) FROM inst_13f",
+        "sentiment": "SELECT MAX(date) FROM sentiment WHERE indicator='composite'",
     }
     return {name: conn.execute(sql).fetchone()[0] for name, sql in queries.items()}

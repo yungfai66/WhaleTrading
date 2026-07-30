@@ -99,6 +99,34 @@ def demo_13f(ticker: str, managers: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def demo_sentiment(days: int = 500) -> pd.DataFrame:
+    """Synthetic market-wide Fear & Greed history (WHALETRADING_DEMO=1),
+    long-format like fear_greed.compute(): columns date/indicator/score/raw.
+    Not derived from real momentum/volatility/etc. — directly generates a
+    mean-reverting composite with regime swings so the history chart shows
+    fear/greed cycles rather than pure noise, then a per-indicator score as
+    the composite plus its own noise so the cards don't all read identical."""
+    rng = _rng("feargreed")
+    dates = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=days)
+    n = len(dates)
+
+    composite = np.full(n, 50.0)
+    for i in range(1, n):
+        composite[i] = composite[i - 1] + rng.normal(0, 1.4) - 0.02 * (composite[i - 1] - 50)
+    composite = np.clip(composite, 0, 100)
+
+    indicators = ("momentum", "volatility", "strength", "breadth", "safe_haven", "junk_bond")
+    date_strs = dates.strftime("%Y-%m-%d")
+    rows = [
+        pd.DataFrame({"date": date_strs, "indicator": "composite", "score": composite.round(2), "raw": np.nan})
+    ]
+    for ind in indicators:
+        score = np.clip(composite + rng.normal(0, 6, n), 0, 100)
+        raw = ((score - 50) / 50 * rng.uniform(0.05, 0.3)).round(4)
+        rows.append(pd.DataFrame({"date": date_strs, "indicator": ind, "score": score.round(2), "raw": raw}))
+    return pd.concat(rows, ignore_index=True)
+
+
 def demo_ats_weekly(ticker: str, prices: pd.DataFrame, weeks: int = 26) -> pd.DataFrame:
     if prices.empty:
         return pd.DataFrame()
