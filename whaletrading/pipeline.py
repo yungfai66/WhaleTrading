@@ -90,11 +90,28 @@ def _refresh_short_volume(conn, cfg: Config, summary: dict, price_frames, ticker
         store.mark_refreshed(conn, "short_volume")
         return
 
-    # Incremental: only fetch days FINRA has that we don't (per whole-batch dates).
-    cached_dates = {
-        row[0]
-        for row in conn.execute("SELECT DISTINCT date FROM short_volume").fetchall()
-    }
+    # Incremental: only fetch days FINRA has that we don't, scoped to the
+    # tickers being refreshed right now — a date only counts as "cached"
+    # once EVERY one of these tickers already has a row for it. A plain
+    # "does any ticker have this date" check (the previous approach) meant
+    # that once the first refresh populated a date range, every later
+    # refresh for a *different* ticker set saw those dates as already
+    # covered and silently skipped fetching them — so newly-added tickers
+    # never got any short_volume rows for the whole cached window. Each
+    # day's FINRA file covers every symbol, so re-fetching a
+    # partially-covered date is one cheap HTTP call and naturally
+    # backfills the missing tickers (store.upsert_df's INSERT OR REPLACE
+    # makes re-inserting already-covered tickers' rows harmless).
+    if tickers:
+        placeholders = ",".join("?" for _ in tickers)
+        rows = conn.execute(
+            f"SELECT date FROM short_volume WHERE ticker IN ({placeholders}) "
+            "GROUP BY date HAVING COUNT(DISTINCT ticker) = ?",
+            [*tickers, len(tickers)],
+        ).fetchall()
+        cached_dates = {row[0] for row in rows}
+    else:
+        cached_dates = set()
     start = date.today() - timedelta(days=cfg.finra_short_volume_days)
     df = finra_short_volume.fetch_range(tickers, start=start, skip_dates=cached_dates)
     if df.empty and not cached_dates:
