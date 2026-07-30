@@ -141,36 +141,51 @@ def _refresh_sentiment(conn, cfg: Config, summary: dict) -> None:
     """Market-wide Fear & Greed composite — ignores the watchlist `tickers`
     entirely, always refreshing off fear_greed.REQUIRED_SYMBOLS (index/ETF
     proxies + a fixed large-cap basket) so the index doesn't drift as the
-    user's watchlist changes."""
+    user's watchlist changes.
+
+    Wrapped in try/except: this is the newest, most computation-heavy
+    source, and refresh_all runs synchronously inside the Streamlit script
+    (auto-refresh on page load, before the sidebar nav even renders) — an
+    uncaught exception here doesn't just fail this one source, it crashes
+    the whole page and leaves the user unable to navigate at all. Every
+    other source already degrades gracefully at its own fetch layer; this
+    makes the same guarantee explicit here too.
+    """
     if cfg.demo_mode:
         store.upsert_df(conn, "sentiment", demo.demo_sentiment())
         store.mark_refreshed(conn, "sentiment")
         return
 
-    frames = prices.fetch_daily_batch(list(fear_greed.REQUIRED_SYMBOLS), cfg.price_lookback_years)
-    # Cache fetched symbols in the same `prices` table the watchlist uses —
-    # free incremental caching, no new input schema, and a symbol that's
-    # both in the basket and the user's watchlist (e.g. AAPL) just gets a
-    # fresher row rather than a conflicting one.
-    for symbol, df in frames.items():
-        rows = df.reset_index()
-        rows["ticker"] = symbol
-        rows["date"] = rows["date"].dt.strftime("%Y-%m-%d")
-        store.upsert_df(conn, "prices", rows[["ticker", "date", "open", "high", "low", "close", "volume"]])
+    try:
+        frames = prices.fetch_daily_batch(list(fear_greed.REQUIRED_SYMBOLS), cfg.price_lookback_years)
+        # Cache fetched symbols in the same `prices` table the watchlist
+        # uses — free incremental caching, no new input schema, and a
+        # symbol that's both in the basket and the user's watchlist (e.g.
+        # AAPL) just gets a fresher row rather than a conflicting one.
+        for symbol, df in frames.items():
+            rows = df.reset_index()
+            rows["ticker"] = symbol
+            rows["date"] = rows["date"].dt.strftime("%Y-%m-%d")
+            store.upsert_df(conn, "prices", rows[["ticker", "date", "open", "high", "low", "close", "volume"]])
 
-    if len(frames) < 2:  # need at least momentum + volatility to say anything
-        summary["sources_failed"] = summary.get("sources_failed", []) + ["fear_greed"]
-        log.warning(
-            "fear & greed: too few symbols fetched (%d/%d)", len(frames), len(fear_greed.REQUIRED_SYMBOLS)
-        )
-        return
+        if len(frames) < 2:  # need at least momentum + volatility to say anything
+            summary["sources_failed"] = summary.get("sources_failed", []) + ["fear_greed"]
+            log.warning(
+                "fear & greed: too few symbols fetched (%d/%d)", len(frames), len(fear_greed.REQUIRED_SYMBOLS)
+            )
+            return
 
-    result = fear_greed.compute(frames)
-    if result.empty:
+        result = fear_greed.compute(frames)
+        if result.empty:
+            summary["sources_failed"] = summary.get("sources_failed", []) + ["fear_greed"]
+            return
+        result = result.copy()
+        result["date"] = result["date"].dt.strftime("%Y-%m-%d")
+        store.upsert_df(conn, "sentiment", result)
+        store.mark_refreshed(conn, "sentiment")
+    except Exception:
         summary["sources_failed"] = summary.get("sources_failed", []) + ["fear_greed"]
-        return
-    store.upsert_df(conn, "sentiment", result)
-    store.mark_refreshed(conn, "sentiment")
+        log.exception("fear & greed refresh failed")
 
 
 def _recompute_metrics(conn, cfg: Config, summary: dict, price_frames, tickers: list[str]) -> None:
