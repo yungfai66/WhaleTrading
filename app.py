@@ -1687,15 +1687,40 @@ def detail_page(cfg, ticker: str, timeframe: str):
                 use_container_width=True,
                 height=_table_height(len(by_period)),
             )
-        tail = chart_frame[
+        st.caption(
+            f"Full cached history for this bar size (up to {cfg.price_lookback_years} "
+            "years) — independent of the Time range picked above, which only zooms the "
+            "chart. Use the filters below to jump straight to every past buy/sell signal "
+            "and check them against what actually happened afterward."
+        )
+        fcol1, fcol2 = st.columns(2)
+        show_buy = fcol1.checkbox("🟢 Buy signal rows only", key="data_table_show_buy")
+        show_sell = fcol2.checkbox("🔴 Sell signal rows only", key="data_table_show_sell")
+
+        full = frame[
             ["close", "volume", "whale_score", "retail_score",
              "buy_signal", "buy_reason", "sell_signal", "sell_reason"]
-        ].tail(50)
-        st.dataframe(
-            tail,
-            use_container_width=True,
-            height=_table_height(len(tail)),
-        )
+        ]
+        if show_buy and show_sell:
+            full = full[full["buy_signal"] | full["sell_signal"]]
+        elif show_buy:
+            full = full[full["buy_signal"]]
+        elif show_sell:
+            full = full[full["sell_signal"]]
+
+        if full.empty:
+            st.info("No rows match the current filter.")
+        else:
+            # Capped, not sized to fit every row (_table_height's usual
+            # no-inner-scrollbar approach) — up to ~1,260 daily bars for a
+            # 5-year lookback would otherwise stretch the page absurdly
+            # tall. st.dataframe's own scrollbar, sort, search, and CSV
+            # export (toolbar, top-right) are exactly the right tools here.
+            st.dataframe(
+                full,
+                use_container_width=True,
+                height=min(_table_height(len(full)), 600),
+            )
 
 
 def go_to_ticker(ticker: str) -> None:
