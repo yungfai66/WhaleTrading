@@ -285,16 +285,20 @@ st.markdown(
        runs in Streamlit's dark theme regardless of OS setting. The gated
        version silently never applied, so the row/header highlight fell
        back to this near-white default against the dark theme's near-white
-       text — unreadable. The hover/header-band tints use color-mix()
-       against currentColor so they self-adjust to whatever text color is
-       actually active instead of a second hardcoded guess. */
+       text — unreadable. Row hover uses a solid light-grey fill with dark
+       text (a fixed, guaranteed-contrast pair) rather than a translucent
+       tint over the light theme text color, which read as low-contrast in
+       practice. The header-band tint still uses color-mix() against
+       currentColor since it's a passive band behind buttons, not a hover
+       state competing with foreground text for contrast. */
     .st-key-watchlist_table { font-variant-numeric: tabular-nums; }
     .st-key-watchlist_table div[data-testid="stHorizontalBlock"] {
         border-bottom: 1px solid #33363f;
         gap: 0.3rem !important;
     }
     .st-key-watchlist_table div[data-testid="stHorizontalBlock"]:hover {
-        background: color-mix(in srgb, currentColor 16%, transparent);
+        background: #c7c9cf;
+        color: #14161c;
     }
     .st-key-watchlist_table div[data-testid="column"] {
         border-right: 1px solid #33363f;
