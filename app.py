@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 from plotly.subplots import make_subplots
 from streamlit_sortables import sort_items
 
@@ -119,8 +120,14 @@ PAGES = {
     "overview": "📊 Watchlist",
     "detail": "📈 Ticker detail",
     "feargreed": "😱 Fear & Greed",
+    "options": "💹 Option Trading",
     "guide": "📖 How to read this",
 }
+
+# yungfai66/option-trader, deployed on Vercel — embedded in-app (via iframe)
+# on its own nav page rather than linked out to a new tab, matching how
+# every other nav button swaps the same page area.
+OPTION_TRADER_URL = "https://optiontrader-eta.vercel.app/"
 
 ZONE_RANK = {"weak": 0, "momentum": 1, "rise": 2, "soar": 3}
 
@@ -1537,6 +1544,18 @@ def fear_greed_page(cfg) -> None:
 SIGNAL_DIAGRAM_DIR = PROJECT_ROOT / "assets"
 
 
+def option_trading_page() -> None:
+    """Embeds the separate Option Trader app (yungfai66/option-trader, on
+    Vercel) in-page via iframe, so it swaps into the same content area as
+    every other nav page instead of opening a new tab."""
+    st.subheader("💹 Option Trading")
+    st.caption(
+        f"Your separate Option Trader app, embedded here — [open in a new tab]({OPTION_TRADER_URL}) "
+        "if anything looks clipped."
+    )
+    components.iframe(OPTION_TRADER_URL, height=1000, scrolling=True)
+
+
 def guide_page(demo_mode: bool) -> None:
     _freshness_section(demo_mode)
     st.divider()
@@ -1977,6 +1996,8 @@ def main():
             detail_page(cfg, ticker, timeframe)
         else:
             st.warning("Your watchlist is empty. Click ✏️ Edit on the Watchlist Overview page to add a ticker.")
+    elif page == "options":
+        option_trading_page()
     elif page == "guide":
         guide_page(cfg.demo_mode)
 
