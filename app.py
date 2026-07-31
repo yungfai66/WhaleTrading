@@ -1570,7 +1570,12 @@ def option_trading_page(watchlist_tickers: list[str]) -> None:
         f"Your separate Option Trader app, embedded here — [open in a new tab]({url}) "
         "if anything looks clipped."
     )
-    components.iframe(url, height=1000, scrolling=True)
+    # optiontrader now caps its option-chain and P&L-matrix tables at a fixed
+    # scrollable height instead of growing unboundedly with strike count, so
+    # its own page height is predictable — measured ~1840-1965px fully
+    # expanded (a leg picked, P&L matrix showing) across both single-leg and
+    # spread strategies. scrolling=True stays as a safety net either way.
+    components.iframe(url, height=2000, scrolling=True)
 
 
 def guide_page(demo_mode: bool) -> None:
