@@ -1,11 +1,12 @@
 name: Prefetch watchlist data
 
-# Refreshes the default watchlist ("US Bought") weekdays shortly after the
-# US market closes and publishes the resulting SQLite cache to the
-# `data-cache` branch. The deployed Streamlit Cloud app downloads it from
-# there (see whaletrading/data/snapshot_sync.py) instead of live-fetching
-# FINRA/EDGAR/Yahoo on a cold container -- see whaletrading/prefetch.py's
-# module docstring for the full picture.
+# Refreshes every watchlist (deduped union of tickers -- a ticker shared by
+# several lists is only fetched once) weekdays shortly after the US market
+# closes, and publishes the resulting SQLite cache to the `data-cache`
+# branch. The deployed Streamlit Cloud app downloads it from there (see
+# whaletrading/data/snapshot_sync.py) instead of live-fetching FINRA/EDGAR/
+# Yahoo on a cold container -- see whaletrading/prefetch.py's module
+# docstring for the full picture.
 #
 # 05:00 SGT (UTC+8) = 21:00 UTC the previous day, so the weekday trigger
 # below is Sun-Thu 21:00 UTC (cron day-of-week: 0=Sun ... 4=Thu).
@@ -42,7 +43,7 @@ jobs:
           fi
 
       - name: Run prefetch
-        run: python -m whaletrading.prefetch "US Bought"
+        run: python -m whaletrading.prefetch
 
       - name: Publish snapshot to data-cache branch
         run: |

@@ -1,10 +1,12 @@
 """Regression tests for the scheduled prefetch entry point (whaletrading.prefetch).
 
-Covers the two things a cron/Task Scheduler run depends on: it refreshes the
-*requested* watchlist's tickers (not some other one), and it records a
-per-watchlist refresh timestamp the same way the app's manual "Refresh data"
-button does -- so the sidebar's "Last refresh" caption reflects a scheduled
-run too, not just a manual click.
+Covers what a cron run depends on: with no argument it refreshes every
+watchlist's tickers in one deduped pass (a ticker shared by several lists is
+only fetched once) and records a last-refresh timestamp for *each* of them;
+with a watchlist name it refreshes just that one. Either way the timestamp is
+recorded the same way the app's manual "Refresh data" button does -- so the
+sidebar's "Last refresh" caption reflects a scheduled run too, not just a
+manual click.
 """
 
 from __future__ import annotations
@@ -38,15 +40,20 @@ def test_prefetch_refreshes_the_named_watchlist(tmp_path, monkeypatch):
 
     conn = store.connect(db_path)
     assert store.get_meta(conn, "last_refresh:pipeline:US Bought") is not None
+    # Only the requested watchlist is touched -- not every list in config.
+    assert store.get_meta(conn, "last_refresh:pipeline:Special Watchlist") is None
     conn.close()
 
 
-def test_prefetch_defaults_to_configs_default_watchlist(tmp_path, monkeypatch):
+def test_prefetch_with_no_argument_refreshes_every_watchlist_deduped(tmp_path, monkeypatch):
     db_path = tmp_path / "test.db"
     monkeypatch.setattr(store, "DB_PATH", db_path)
 
     cfg = Config(
-        watchlists={"US Bought": ["MSFT"]},
+        watchlists={
+            "Special Watchlist": ["AAPL", "MSFT"],
+            "US Bought": ["MSFT", "TSLA"],
+        },
         default_watchlist="US Bought",
     )
     monkeypatch.setattr(prefetch, "load_config", lambda: cfg)
@@ -58,7 +65,14 @@ def test_prefetch_defaults_to_configs_default_watchlist(tmp_path, monkeypatch):
     monkeypatch.setattr(prefetch.sys, "argv", ["prefetch"])
 
     assert prefetch.main() == 0
-    assert calls == [["MSFT"]]
+    # AAPL, MSFT, TSLA fetched once each, not MSFT twice for appearing in
+    # both lists.
+    assert calls == [["AAPL", "MSFT", "TSLA"]]
+
+    conn = store.connect(db_path)
+    assert store.get_meta(conn, "last_refresh:pipeline:Special Watchlist") is not None
+    assert store.get_meta(conn, "last_refresh:pipeline:US Bought") is not None
+    conn.close()
 
 
 def test_prefetch_rejects_unknown_watchlist(tmp_path, monkeypatch, capsys):

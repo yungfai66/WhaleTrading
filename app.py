@@ -44,11 +44,16 @@ def gist_configured() -> tuple[str, str] | None:
     gist_id = os.environ.get("GITHUB_GIST_ID")
     return (token, gist_id) if token and gist_id else None
 
-# Validated palette (dataviz reference, light mode).
+# Validated palette (dataviz reference, light mode). "surface" matches
+# claude.ai's own light-mode background (#f9f9f7, sampled live) rather than
+# pure white; "ink"/"ink2" are near-black so chart text stays readable
+# against that light surface regardless of which theme the app page itself
+# is in (charts don't flip to a dark background — black-on-light stays
+# legible either way, whereas black-on-dark wouldn't).
 C = {
-    "surface": "#fcfcfb",
-    "ink": "#0b0b0b",
-    "ink2": "#52514e",
+    "surface": "#f9f9f7",
+    "ink": "#141413",
+    "ink2": "#141413",
     "muted": "#898781",
     "grid": "#e1e0d9",
     "whale": "#e34948",     # red bars = whale accumulation (strategy convention)
@@ -112,8 +117,8 @@ DEFAULT_RANGE = {"D": "1Y", "W": "2Y", "M": "All"}
 # narrower than its default width.
 PAGES = {
     "overview": "📊 Watchlist",
-    "feargreed": "😱 Fear & Greed",
     "detail": "📈 Ticker detail",
+    "feargreed": "😱 Fear & Greed",
     "guide": "📖 How to read this",
 }
 
@@ -236,6 +241,11 @@ st.set_page_config(page_title="WhaleTrading", page_icon="🐋", layout="wide")
 st.markdown(
     """
     <style>
+    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap');
+    html, body, .stApp, .stApp * {
+        font-family: 'Outfit', sans-serif !important;
+    }
+
     /* Streamlit's fixed header is ~60px (3.75rem) tall with a high z-index —
        padding-top must clear it or content underneath gets visually hidden
        behind it (looks broken: e.g. a button's colored fill shows but its
@@ -269,8 +279,10 @@ st.markdown(
         display: block;
     }
 
-    /* Ticker + bar-size controls nested under the "Ticker detail" nav
-       button in the left panel — indented so they read as sub-controls. */
+    /* Watchlist dropdown nested under the "Watchlist" nav button, and the
+       Ticker + bar-size controls nested under "Ticker detail" — indented so
+       they read as sub-controls of the button above them. */
+    .st-key-watchlist_nav { margin-left: 0.9rem; margin-bottom: 0.3rem; }
     .st-key-ticker_detail_nav { margin-left: 0.9rem; margin-bottom: 0.3rem; }
 
     /* Watchlist table: bordered cells, minimal row/column spacing. Scoped
@@ -641,17 +653,26 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
     # Ribbon lines drawn first (bottom layer), then the close-price line in a
     # single bold, unmistakable color (so it's never confused with the 5
     # thinner ribbon lines), then candles on top so their wicks stay visible.
+    # hoverinfo used to be "skip" on these — under hovermode="x unified" that
+    # meant NONE of the 5 EMA lines ever appeared in the hover tooltip while
+    # panning across the timeline (only the candlestick/markers did), which
+    # read as the ribbon "not showing" / jumping between points. Each line
+    # now reports its own EMA span and value; connectgaps is a no-op today
+    # (ewm(adjust=False) never produces NaNs) but keeps the line unbroken if
+    # that ever changes.
     ema_cols = [c for c in frame.columns if c.startswith("ema_")]
     for i, (color, col) in enumerate(zip(RIBBON_STEPS, ema_cols)):
+        span = col.removeprefix("ema_")
         fig.add_trace(
             go.Scatter(
                 x=frame.index,
                 y=frame[col],
                 mode="lines",
                 line=dict(color=color, width=1),
+                connectgaps=True,
                 name="Trend ribbon (EMAs)",
                 legendgroup="ribbon",
-                hoverinfo="skip",
+                hovertemplate=f"EMA {span}: %{{y:,.2f}}<extra></extra>",
                 showlegend=(i == 0),
             ),
             row=1,
@@ -878,7 +899,7 @@ def four_panel_figure(frame: pd.DataFrame, ticker: str, thresholds: dict) -> go.
         bargap=0.25,
         paper_bgcolor=C["surface"],
         plot_bgcolor=C["surface"],
-        font=dict(color=C["ink2"], family='system-ui, -apple-system, "Segoe UI", sans-serif'),
+        font=dict(color=C["ink2"], family="Outfit, sans-serif"),
         hovermode="x unified",
         hoverlabel=dict(bgcolor=C["surface"], bordercolor=C["grid"], font=dict(size=11, color=C["ink2"])),
         legend=dict(y=1.0, **legend_style),
@@ -1361,7 +1382,7 @@ def _fg_gauge_figure(score: float) -> go.Figure:
         height=230,
         margin=dict(l=25, r=25, t=25, b=5),
         paper_bgcolor=C["surface"],
-        font=dict(color=C["ink"], family="sans-serif"),
+        font=dict(color=C["ink"], family="Outfit, sans-serif"),
     )
     return fig
 
@@ -1382,7 +1403,7 @@ def _fg_history_figure(composite: pd.Series) -> go.Figure:
         margin=dict(l=35, r=15, t=10, b=25),
         paper_bgcolor=C["surface"],
         plot_bgcolor=C["surface"],
-        font=dict(color=C["ink2"], size=10),
+        font=dict(color=C["ink2"], size=10, family="Outfit, sans-serif"),
         yaxis=dict(range=[0, 100], gridcolor=C["grid"]),
         xaxis=dict(gridcolor=C["grid"]),
         showlegend=False,
@@ -1755,7 +1776,7 @@ def detail_page(cfg, ticker: str, timeframe: str):
         config={"displayModeBar": False},
     )
 
-    with st.expander("Score composition & data table"):
+    with st.expander("Score composition & data table", expanded=True):
         conn = store.connect()
         metrics = store.load_metrics(conn, ticker)
         holdings = store.load_13f(conn, ticker)
@@ -1783,8 +1804,8 @@ def detail_page(cfg, ticker: str, timeframe: str):
             "and check them against what actually happened afterward."
         )
         fcol1, fcol2 = st.columns(2)
-        show_buy = fcol1.checkbox("🟢 Buy signal rows only", key="data_table_show_buy")
-        show_sell = fcol2.checkbox("🔴 Sell signal rows only", key="data_table_show_sell")
+        show_buy = fcol1.checkbox("🟢 Buy signal rows only", value=True, key="data_table_show_buy")
+        show_sell = fcol2.checkbox("🔴 Sell signal rows only", value=True, key="data_table_show_sell")
 
         full = frame[
             ["close", "volume", "whale_score", "retail_score",
@@ -1844,24 +1865,19 @@ def main():
         name = load_company_name(t)
         return f"{t} — {name}" if name else t
 
-    # Left panel: watchlist switcher, Refresh button, then link-style nav
-    # buttons (no radio bullets), with the Ticker/Bar-size controls nested
-    # directly under "Ticker detail" since they only matter for that page.
-    # Collapsible and resizable by dragging its right edge — native
-    # Streamlit sidebar behavior, nothing custom needed for that part.
+    # Left panel, top to bottom: data-refresh status, Refresh button, then
+    # link-style nav buttons (no radio bullets) with each page's own control
+    # nested directly under its button — Watchlist dropdown under "Watchlist",
+    # Ticker/Bar-size under "Ticker detail" — since those controls only
+    # matter once you're on that page. Collapsible and resizable by dragging
+    # its right edge — native Streamlit sidebar behavior, nothing custom
+    # needed for that part.
     with st.sidebar:
-        st.selectbox(
-            "Watchlist", list(cfg.watchlists), key="active_watchlist",
-            help=(
-                "Which watchlist is active — sets what the Watchlist page "
-                "shows, what the Ticker detail dropdown offers, and which "
-                "list 🔄 Refresh data touches."
-            ),
-        )
         active_name = st.session_state["active_watchlist"]
         conn = store.connect()
         last = store.get_meta(conn, f"last_refresh:pipeline:{active_name}")
         conn.close()
+        st.caption(f"📅 Last refresh of “{active_name}”: {_format_singapore(last)}")
         if st.button(
             "🔄 Refresh data",
             type="primary",
@@ -1869,7 +1885,7 @@ def main():
             help=(
                 "Re-fetches FINRA (dark-pool volume), SEC EDGAR (13F holdings), "
                 "and Yahoo Finance (prices) for every ticker in the *active* "
-                "watchlist above, then recomputes whale/retail scores. Other "
+                "watchlist below, then recomputes whale/retail scores. Other "
                 "watchlists are untouched — switch to one and refresh it "
                 "separately. First run for a list can take a few minutes; "
                 "later refreshes are incremental."
@@ -1883,16 +1899,15 @@ def main():
                 st.warning("Unavailable sources: " + ", ".join(failed))
             st.cache_data.clear()
             st.rerun()
-        st.caption(f"Last refresh of “{active_name}”: {_format_singapore(last)}")
         st.divider()
 
         # Collect a page switch and apply st.rerun() only after every widget
-        # in this loop (including the Ticker selectbox below) has rendered
-        # for this run. Streamlit drops a keyed widget's session_state entry
-        # for any run that doesn't instantiate it — calling st.rerun() early
-        # (e.g. right inside the button's own branch) would abort the script
-        # before the selectbox below ever renders, silently resetting
-        # detail_ticker back to the first ticker on the next run.
+        # in this loop (including the Watchlist/Ticker selectboxes below) has
+        # rendered for this run. Streamlit drops a keyed widget's
+        # session_state entry for any run that doesn't instantiate it —
+        # calling st.rerun() early (e.g. right inside the button's own
+        # branch) would abort the script before those widgets render,
+        # silently resetting their selection on the next run.
         pending_page = None
         for key, label in PAGES.items():
             active = st.session_state["current_page"] == key
@@ -1901,6 +1916,18 @@ def main():
                 type="primary" if active else "secondary",
             ):
                 pending_page = key
+            if key == "overview":
+                with st.container(key="watchlist_nav"):
+                    st.selectbox(
+                        "Watchlist", list(cfg.watchlists), key="active_watchlist",
+                        label_visibility="collapsed",
+                        help=(
+                            "Which watchlist is active — sets what the "
+                            "Watchlist page shows, what the Ticker detail "
+                            "dropdown offers, and which list 🔄 Refresh "
+                            "data touches."
+                        ),
+                    )
             if key == "detail" and working:
                 if st.session_state.get("detail_ticker") not in working:
                     st.session_state["detail_ticker"] = working[0]
