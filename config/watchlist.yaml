@@ -8,7 +8,7 @@
 # import box) and are session/Gist-scoped, not written back here.
 # ---------------------------------------------------------------------------
 
-default_watchlist: "Special Watchlist"
+default_watchlist: "US Bought"
 
 watchlists:
   # Your original hand-picked list.

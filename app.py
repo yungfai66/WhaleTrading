@@ -10,7 +10,7 @@ import html
 import json
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -20,7 +20,7 @@ from plotly.subplots import make_subplots
 from streamlit_sortables import sort_items
 
 from whaletrading import signals
-from whaletrading.config import load_config
+from whaletrading.config import PROJECT_ROOT, load_config
 from whaletrading.data import gist_store
 from whaletrading.data import prices as prices_mod
 from whaletrading.data import store
@@ -278,30 +278,23 @@ st.markdown(
        via st.container(key=...)) so it doesn't affect other tables/columns
        elsewhere in the app. font-variant-numeric keeps digits a fixed width
        so Close/Whale/Δ20d/Retail line up column-wise instead of drifting.
-
-       Colors below are unconditional, not gated on
-       @media(prefers-color-scheme: dark) — that tracks the OS/browser
-       theme, not Streamlit's own in-app theme toggle, and this app always
-       runs in Streamlit's dark theme regardless of OS setting. The gated
-       version silently never applied, so the row/header highlight fell
-       back to this near-white default against the dark theme's near-white
-       text — unreadable. Row hover uses a solid light-grey fill with dark
-       text (a fixed, guaranteed-contrast pair) rather than a translucent
-       tint over the light theme text color, which read as low-contrast in
-       practice. The header-band tint still uses color-mix() against
-       currentColor since it's a passive band behind buttons, not a hover
-       state competing with foreground text for contrast. */
+       Border/background colors that need to differ between light and dark
+       are set separately below, driven by st.context.theme.type — see that
+       block's comment for why. */
     .st-key-watchlist_table { font-variant-numeric: tabular-nums; }
     .st-key-watchlist_table div[data-testid="stHorizontalBlock"] {
-        border-bottom: 1px solid #33363f;
         gap: 0.3rem !important;
     }
+    /* Row hover: solid light-grey fill with dark text (a fixed,
+       guaranteed-contrast pair) rather than a translucent tint derived from
+       the active text color, which read as low-contrast in practice. Works
+       unchanged in both themes — a light-grey band reads fine on a white
+       page too — so it isn't part of the light/dark split below. */
     .st-key-watchlist_table div[data-testid="stHorizontalBlock"]:hover {
         background: #c7c9cf;
         color: #14161c;
     }
     .st-key-watchlist_table div[data-testid="column"] {
-        border-right: 1px solid #33363f;
         padding: 0.05rem 0.4rem !important;
     }
     .st-key-watchlist_table div[data-testid="column"]:last-child { border-right: none; }
@@ -314,7 +307,11 @@ st.markdown(
     .st-key-watchlist_table div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(9) {
         text-align: right;
     }
-    /* Header row: tinted band so it reads as a header, not just another row. */
+    /* Header row: tinted band so it reads as a header, not just another
+       row. color-mix() against currentColor self-adjusts to whichever text
+       color the active theme actually uses, so — unlike a hover state
+       competing with foreground text — this one doesn't need a light/dark
+       split either. */
     .st-key-watchlist_header_row {
         background: color-mix(in srgb, currentColor 8%, transparent);
         border-radius: 4px 4px 0 0;
@@ -323,10 +320,8 @@ st.markdown(
        a font size that tracks viewport width — the original bug (a full
        column-width label + sort arrow at a fixed 0.78rem font wrapped to
        two lines and broke row alignment). Background/text/border colors are
-       also overridden here: Streamlit's own secondary-button style renders
-       a fixed white pill with dark text regardless of the app's dark theme
-       — the actual source of the "header button contrast, ugly" complaint,
-       separate from (and not fixed by) the row/header-band coloring above. */
+       set separately below (Streamlit's own secondary-button style is a
+       fixed white pill with dark text regardless of theme). */
     .st-key-watchlist_table .stButton button {
         padding: 0.05rem 0.3rem !important;
         font-size: clamp(0.68rem, 0.78vw, 0.82rem) !important;
@@ -334,14 +329,6 @@ st.markdown(
         overflow: hidden;
         text-overflow: ellipsis;
         width: 100%;
-        background-color: #2c2f37 !important;
-        color: #e8e8ec !important;
-        border-color: #454850 !important;
-    }
-    .st-key-watchlist_table .stButton button:hover {
-        background-color: #383c45 !important;
-        border-color: #5a5e68 !important;
-        color: #ffffff !important;
     }
 
     /* Watchlist % bar (Whale column) — a real filled track, not the old
@@ -351,7 +338,6 @@ st.markdown(
         display: inline-block;
         width: 60px;
         height: 8px;
-        background: #33363f;
         border-radius: 4px;
         vertical-align: middle;
         margin-right: 0.4rem;
@@ -364,14 +350,51 @@ st.markdown(
         border-radius: 4px;
         background: #e34948;
     }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-    /* App/header background: Streamlit's default dark theme (#0e1117)
-       reads as harsh near-black. Softer dark grey instead; Streamlit's own
-       sidebar background (#262730) is untouched since it isn't part of the
-       complaint. Unconditional for the same reason as above — the OS media
-       query this used to be gated on never matched this app's actual
-       (always-dark) theme. */
-    .stApp, [data-testid="stHeader"] { background: #20232a; }
+# Colors that must actually differ between Streamlit's light and dark
+# themes (page/header background, table borders, button chrome). Previously
+# gated on @media(prefers-color-scheme: dark), which tracks the OS/browser
+# preference, not Streamlit's own in-app theme toggle — the two silently
+# diverge (confirmed live: forcing the OS scheme to light while Streamlit's
+# own theme was dark left the override never firing), and a later attempt
+# to "fix" this by applying the dark palette unconditionally broke light
+# theme instead (page went black in light mode). st.context.theme.type
+# reports the client's actual active theme, including the user's own
+# Settings > Theme choice, so it's the one reliable signal here. It can be
+# None for a brief moment on a session's very first script run (before the
+# browser has reported back) — treated as light, matching Streamlit's own
+# default.
+_dark_theme = st.context.theme.type == "dark"
+_row_border = "#33363f" if _dark_theme else "#e1e0d9"
+_btn_bg = "#2c2f37" if _dark_theme else "#f0f0f2"
+_btn_text = "#e8e8ec" if _dark_theme else "#31333f"
+_btn_border = "#454850" if _dark_theme else "#c9c9d1"
+_btn_hover_bg = "#383c45" if _dark_theme else "#e2e2e6"
+_btn_hover_border = "#5a5e68" if _dark_theme else "#a8a8b2"
+_btn_hover_text = "#ffffff" if _dark_theme else "#14161c"
+_bar_track_bg = "#33363f" if _dark_theme else "#e1e0d9"
+_app_bg = "#20232a" if _dark_theme else "#ffffff"
+st.markdown(
+    f"""
+    <style>
+    .st-key-watchlist_table div[data-testid="stHorizontalBlock"] {{ border-bottom: 1px solid {_row_border}; }}
+    .st-key-watchlist_table div[data-testid="column"] {{ border-right: 1px solid {_row_border}; }}
+    .st-key-watchlist_table .stButton button {{
+        background-color: {_btn_bg} !important;
+        color: {_btn_text} !important;
+        border-color: {_btn_border} !important;
+    }}
+    .st-key-watchlist_table .stButton button:hover {{
+        background-color: {_btn_hover_bg} !important;
+        border-color: {_btn_hover_border} !important;
+        color: {_btn_hover_text} !important;
+    }}
+    .wt-bar-track {{ background: {_bar_track_bg}; }}
+    .stApp, [data-testid="stHeader"] {{ background: {_app_bg}; }}
     </style>
     """,
     unsafe_allow_html=True,
@@ -403,39 +426,6 @@ def bootstrap_data(_cfg) -> bool:
     refresh_all(_cfg, tickers=_cfg.watchlists[_cfg.default_watchlist])
     _mark_watchlist_refreshed(_cfg.default_watchlist)
     return True
-
-
-# How stale the cache must be (minutes since last pipeline refresh) before a
-# new page load/reload triggers an automatic refresh. Session-scoped (not
-# st.cache_resource), so it fires once per browser session/reload rather than
-# once per container lifetime — without this a re-opened tab could sit on a
-# refresh from hours ago until someone remembers to click the button.
-AUTO_REFRESH_STALE_MINUTES = 30
-
-
-def auto_refresh_if_stale(cfg) -> None:
-    """Fires at most once per session, scoped to whichever watchlist is
-    active at that moment (almost always the default one, at page load).
-    Switching to a *different*, never-yet-refreshed watchlist later in the
-    same session doesn't re-trigger this — the existing "no data — run
-    refresh" row messaging covers that; 🔄 Refresh data handles it in one
-    click without a second automatic full-app refresh happening in the
-    background."""
-    if st.session_state.get("_auto_refresh_done"):
-        return
-    st.session_state["_auto_refresh_done"] = True
-    active_name = st.session_state["active_watchlist"]
-    conn = store.connect()
-    last = store.get_meta(conn, f"last_refresh:pipeline:{active_name}")
-    conn.close()
-    if last:
-        age_min = (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds() / 60
-        if age_min < AUTO_REFRESH_STALE_MINUTES:
-            return
-    with st.spinner("Refreshing data…"):
-        refresh_all(cfg, tickers=get_working_watchlist(cfg))
-        _mark_watchlist_refreshed(active_name)
-    st.cache_data.clear()
 
 
 @st.cache_data(ttl=60)
@@ -1474,158 +1464,14 @@ def fear_greed_page(cfg) -> None:
 
 
 # Static reference diagram for the "How to read this" guide: the buy/sell
-# signal logic (OR of AND-paths) from signals.py, rendered once here rather
-# than regenerated per view. Update this by hand if signals.py's rules change.
-SIGNAL_DIAGRAM_SVG = """
-<div style="max-width:900px;margin:0 auto;">
-<svg viewBox="0 0 900 742" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="dtitle ddesc" style="width:100%;height:auto;display:block;">
-  <title id="dtitle">WhaleTrading buy/sell signal composition</title>
-  <desc id="ddesc">The buy signal is an OR of three AND-conditions (dip reversal, ribbon turn, MACD cross). The sell signal is an OR of two AND-conditions (whale-to-retail shift, yellow candle).</desc>
-  <style>
-    .wtdiag-root {
-      --card-bg: #f3f4f6; --card-border: #d1d5db;
-      --chip-bg: #ffffff; --chip-border: #cbd5e1;
-      --text: #1f2937; --muted: #6b7280;
-      --line: #9ca3af;
-      --buy: #16a34a; --sell: #dc2626;
-      --header-buy: #dcfce7; --header-sell: #fee2e2;
-    }
-    @media (prefers-color-scheme: dark) {
-      .wtdiag-root {
-        --card-bg: #1f2937; --card-border: #374151;
-        --chip-bg: #111827; --chip-border: #374151;
-        --text: #e5e7eb; --muted: #9ca3af;
-        --line: #6b7280;
-        --buy: #22c55e; --sell: #f87171;
-        --header-buy: #14532d; --header-sell: #7f1d1d;
-      }
-    }
-    .wtdiag-root text { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: var(--text); }
-    .wtdiag-root .section { font-size: 15px; font-weight: 600; }
-    .wtdiag-root .legend { font-size: 12px; fill: var(--muted); }
-    .wtdiag-root .cardhdr { font-size: 12px; font-weight: 700; }
-    .wtdiag-root .chip { font-size: 12px; }
-    .wtdiag-root .andlbl { font-size: 10px; fill: var(--muted); font-weight: 600; letter-spacing: 0.5px; }
-    .wtdiag-root .orlbl { font-size: 13px; fill: var(--muted); font-weight: 700; }
-    .wtdiag-root .outlbl { font-size: 15px; font-weight: 700; fill: #fff; }
-    .wtdiag-root .card { fill: var(--card-bg); stroke: var(--card-border); stroke-width: 1; rx: 8; }
-    .wtdiag-root .chipbox { fill: var(--chip-bg); stroke: var(--chip-border); stroke-width: 1; rx: 6; }
-    .wtdiag-root .conn { stroke: var(--line); stroke-width: 1.5; fill: none; }
-    .wtdiag-root .arrow { stroke: var(--line); stroke-width: 1.5; fill: none; marker-end: url(#wtdiag-arrowhead); }
-  </style>
-  <defs>
-    <marker id="wtdiag-arrowhead" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-      <path d="M0,0 L6,3 L0,6 Z" fill="var(--line)"/>
-    </marker>
-  </defs>
-  <g class="wtdiag-root">
-
-  <text x="450" y="24" text-anchor="middle" class="legend">Green = triggers a buy · Red = triggers a sell · each card's rows are AND'd; cards combine via OR</text>
-
-  <!-- BUY SECTION -->
-  <text x="90" y="52" class="section">BUY signal — fires if ANY of these 3 paths is true</text>
-
-  <!-- Card A: Dip reversal (4 conditions) -->
-  <rect x="90" y="64" width="220" height="210" class="card"/>
-  <rect x="90" y="64" width="220" height="26" fill="var(--header-buy)" rx="8"/>
-  <rect x="90" y="82" width="220" height="8" fill="var(--header-buy)"/>
-  <text x="200" y="81" text-anchor="middle" class="cardhdr">Path 1 — Dip reversal</text>
-  <rect x="102" y="98" width="196" height="32" class="chipbox"/>
-  <text x="200" y="118" text-anchor="middle" class="chip">Up-close candle after a decline</text>
-  <text x="200" y="139" text-anchor="middle" class="andlbl">AND</text>
-  <rect x="102" y="146" width="196" height="32" class="chipbox"/>
-  <text x="200" y="166" text-anchor="middle" class="chip">Ribbon still bearish (downtrend)</text>
-  <text x="200" y="187" text-anchor="middle" class="andlbl">AND</text>
-  <rect x="102" y="194" width="196" height="32" class="chipbox"/>
-  <text x="200" y="214" text-anchor="middle" class="chip">Ribbon tightening (narrowing)</text>
-  <text x="200" y="235" text-anchor="middle" class="andlbl">AND</text>
-  <rect x="102" y="242" width="196" height="26" class="chipbox"/>
-  <text x="200" y="259" text-anchor="middle" class="chip">Whale rising OR retail falling</text>
-
-  <!-- Card B: Ribbon turn (3 conditions) -->
-  <rect x="340" y="64" width="220" height="166" class="card"/>
-  <rect x="340" y="64" width="220" height="26" fill="var(--header-buy)" rx="8"/>
-  <rect x="340" y="82" width="220" height="8" fill="var(--header-buy)"/>
-  <text x="450" y="81" text-anchor="middle" class="cardhdr">Path 2 — Ribbon turn</text>
-  <rect x="352" y="98" width="196" height="32" class="chipbox"/>
-  <text x="450" y="118" text-anchor="middle" class="chip">Up-close candle</text>
-  <text x="450" y="139" text-anchor="middle" class="andlbl">AND</text>
-  <rect x="352" y="146" width="196" height="32" class="chipbox"/>
-  <text x="450" y="163" text-anchor="middle" class="chip">Ribbon just turned bullish</text>
-  <text x="450" y="176" text-anchor="middle" class="chip" font-size="10">("red ribbon forming")</text>
-  <text x="450" y="195" text-anchor="middle" class="andlbl">AND</text>
-  <rect x="352" y="200" width="196" height="26" class="chipbox"/>
-  <text x="450" y="217" text-anchor="middle" class="chip">Whale rising OR retail falling</text>
-
-  <!-- Card C: MACD cross (2 conditions) -->
-  <rect x="590" y="64" width="220" height="122" class="card"/>
-  <rect x="590" y="64" width="220" height="26" fill="var(--header-buy)" rx="8"/>
-  <rect x="590" y="82" width="220" height="8" fill="var(--header-buy)"/>
-  <text x="700" y="81" text-anchor="middle" class="cardhdr">Path 3 — MACD cross</text>
-  <rect x="602" y="98" width="196" height="32" class="chipbox"/>
-  <text x="700" y="118" text-anchor="middle" class="chip">MACD golden cross</text>
-  <text x="700" y="139" text-anchor="middle" class="andlbl">AND</text>
-  <rect x="602" y="146" width="196" height="32" class="chipbox"/>
-  <text x="700" y="166" text-anchor="middle" class="chip">Whale score rising</text>
-
-  <!-- Converge to OR -->
-  <path d="M200,274 L200,290" class="conn"/>
-  <path d="M450,230 L450,290" class="conn"/>
-  <path d="M700,186 L700,290" class="conn"/>
-  <path d="M200,290 L700,290" class="conn"/>
-  <text x="450" y="303" text-anchor="middle" class="orlbl">OR</text>
-  <path d="M450,290 L450,320" class="arrow"/>
-
-  <rect x="350" y="322" width="200" height="42" rx="8" fill="var(--buy)"/>
-  <text x="450" y="349" text-anchor="middle" class="outlbl">BUY signal</text>
-
-  <!-- divider -->
-  <line x1="60" y1="392" x2="840" y2="392" stroke="var(--card-border)" stroke-width="1"/>
-
-  <!-- SELL SECTION -->
-  <text x="90" y="420" class="section">SELL / trim signal — fires if EITHER of these 2 paths is true</text>
-
-  <!-- Card D: whale-&gt;retail shift (3 conditions) -->
-  <rect x="215" y="432" width="220" height="166" class="card"/>
-  <rect x="215" y="432" width="220" height="26" fill="var(--header-sell)" rx="8"/>
-  <rect x="215" y="450" width="220" height="8" fill="var(--header-sell)"/>
-  <text x="325" y="449" text-anchor="middle" class="cardhdr">Path 1 — Whale→retail shift</text>
-  <rect x="227" y="466" width="196" height="32" class="chipbox"/>
-  <text x="325" y="486" text-anchor="middle" class="chip">Whale score falling</text>
-  <text x="325" y="507" text-anchor="middle" class="andlbl">AND</text>
-  <rect x="227" y="514" width="196" height="32" class="chipbox"/>
-  <text x="325" y="534" text-anchor="middle" class="chip">Retail score rising</text>
-  <text x="325" y="555" text-anchor="middle" class="andlbl">AND</text>
-  <rect x="227" y="562" width="196" height="26" class="chipbox"/>
-  <text x="325" y="579" text-anchor="middle" class="chip">Ribbon still bullish</text>
-
-  <!-- Card E: yellow candle (2 conditions) -->
-  <rect x="465" y="432" width="220" height="122" class="card"/>
-  <rect x="465" y="432" width="220" height="26" fill="var(--header-sell)" rx="8"/>
-  <rect x="465" y="450" width="220" height="8" fill="var(--header-sell)"/>
-  <text x="575" y="449" text-anchor="middle" class="cardhdr">Path 2 — Yellow candle</text>
-  <rect x="477" y="466" width="196" height="32" class="chipbox"/>
-  <text x="575" y="486" text-anchor="middle" class="chip">Down-close candle after a rally</text>
-  <text x="575" y="507" text-anchor="middle" class="andlbl">AND</text>
-  <rect x="477" y="514" width="196" height="32" class="chipbox"/>
-  <text x="575" y="534" text-anchor="middle" class="chip">Whale score falling</text>
-
-  <!-- Converge to OR -->
-  <path d="M325,598 L325,614" class="conn"/>
-  <path d="M575,554 L575,614" class="conn"/>
-  <path d="M325,614 L575,614" class="conn"/>
-  <text x="450" y="627" text-anchor="middle" class="orlbl">OR</text>
-  <path d="M450,614 L450,644" class="arrow"/>
-
-  <rect x="350" y="646" width="200" height="42" rx="8" fill="var(--sell)"/>
-  <text x="450" y="673" text-anchor="middle" class="outlbl">SELL / trim signal</text>
-
-  <text x="450" y="712" text-anchor="middle" class="legend">"Whale rising/falling" and "retail rising/falling" = 3-bar score delta beyond a ±2-point threshold (steady otherwise).</text>
-  <text x="450" y="730" text-anchor="middle" class="legend">A ticker can show BOTH a buy and a sell in the same week if unrelated paths on each side happen to fire together.</text>
-  </g>
-</svg>
-</div>
-"""
+# signal logic (OR of AND-paths) from signals.py, pre-rendered to PNG (one
+# per theme, see assets/signal_diagram_{light,dark}.png) rather than
+# embedded as inline SVG -- the SVG version depended on the same
+# @media(prefers-color-scheme) detection that turned out to be unreliable
+# elsewhere in this file (see the theme block above). Regenerate the PNGs
+# by hand if signals.py's rules change; source SVG markup is in git
+# history (this file, prior to this comment).
+SIGNAL_DIAGRAM_DIR = PROJECT_ROOT / "assets"
 
 
 def guide_page(demo_mode: bool) -> None:
@@ -1688,7 +1534,8 @@ to trigger the signal, but every condition *within* a path has to line up at
 the same time. The diagram below shows the full logic:
 """
     )
-    st.markdown(SIGNAL_DIAGRAM_SVG, unsafe_allow_html=True)
+    _diagram_name = "signal_diagram_dark.png" if st.context.theme.type == "dark" else "signal_diagram_light.png"
+    st.image(str(SIGNAL_DIAGRAM_DIR / _diagram_name), width="stretch")
     st.markdown(
         """
 **The whale-score zones** (thresholds configurable per stock): below 35 =
@@ -1947,7 +1794,6 @@ def main():
 
     with st.spinner("First run — fetching data (FINRA / EDGAR / prices)…"):
         bootstrap_data(cfg)
-    auto_refresh_if_stale(cfg)
 
     def _ticker_option(t: str) -> str:
         if cfg.demo_mode:
