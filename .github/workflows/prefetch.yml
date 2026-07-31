@@ -49,6 +49,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout --orphan data-cache-publish
+          git rm -rf --cached . > /dev/null
           git add -f data/whaletrading.db data/snapshot_meta.json
           git commit -m "Prefetch snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           git push origin data-cache-publish:data-cache --force
