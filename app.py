@@ -11,6 +11,7 @@ import json
 import os
 import re
 from datetime import datetime
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -1544,16 +1545,32 @@ def fear_greed_page(cfg) -> None:
 SIGNAL_DIAGRAM_DIR = PROJECT_ROOT / "assets"
 
 
-def option_trading_page() -> None:
+def option_trading_page(watchlist_tickers: list[str]) -> None:
     """Embeds the separate Option Trader app (yungfai66/option-trader, on
     Vercel) in-page via iframe, so it swaps into the same content area as
-    every other nav page instead of opening a new tab."""
+    every other nav page instead of opening a new tab.
+
+    The ticker box lists the active watchlist but also accepts free text
+    (accept_new_options) for anything not on it. Whatever's chosen is passed
+    to the embed via ?symbol=, which optiontrader's calculator pages read on
+    mount to auto-load that ticker's quote/chain (see its own StrategyCalculator/
+    SpreadCalculator components) instead of requiring it to be re-typed there.
+    """
     st.subheader("💹 Option Trading")
+    ticker = st.selectbox(
+        "Ticker",
+        watchlist_tickers,
+        accept_new_options=True,
+        placeholder="Type a ticker…",
+        key="option_trading_ticker",
+        help="Pick a ticker from the active watchlist, or type any other symbol.",
+    )
+    url = f"{OPTION_TRADER_URL}?symbol={quote(ticker)}" if ticker else OPTION_TRADER_URL
     st.caption(
-        f"Your separate Option Trader app, embedded here — [open in a new tab]({OPTION_TRADER_URL}) "
+        f"Your separate Option Trader app, embedded here — [open in a new tab]({url}) "
         "if anything looks clipped."
     )
-    components.iframe(OPTION_TRADER_URL, height=1000, scrolling=True)
+    components.iframe(url, height=1000, scrolling=True)
 
 
 def guide_page(demo_mode: bool) -> None:
@@ -1997,7 +2014,7 @@ def main():
         else:
             st.warning("Your watchlist is empty. Click ✏️ Edit on the Watchlist Overview page to add a ticker.")
     elif page == "options":
-        option_trading_page()
+        option_trading_page(working)
     elif page == "guide":
         guide_page(cfg.demo_mode)
 
