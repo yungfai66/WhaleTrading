@@ -1,0 +1,54 @@
+name: Prefetch watchlist data
+
+# Refreshes the default watchlist ("US Bought") weekdays shortly after the
+# US market closes and publishes the resulting SQLite cache to the
+# `data-cache` branch. The deployed Streamlit Cloud app downloads it from
+# there (see whaletrading/data/snapshot_sync.py) instead of live-fetching
+# FINRA/EDGAR/Yahoo on a cold container -- see whaletrading/prefetch.py's
+# module docstring for the full picture.
+#
+# 05:00 SGT (UTC+8) = 21:00 UTC the previous day, so the weekday trigger
+# below is Sun-Thu 21:00 UTC (cron day-of-week: 0=Sun ... 4=Thu).
+
+on:
+  schedule:
+    - cron: "0 21 * * 0,1,2,3,4"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  prefetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: Restore previous snapshot (lets the pipeline fetch incrementally)
+        run: |
+          mkdir -p data
+          if git fetch origin data-cache --depth=1 2>/dev/null; then
+            git show origin/data-cache:data/whaletrading.db > data/whaletrading.db 2>/dev/null \
+              && echo "restored previous snapshot" \
+              || echo "data-cache branch has no db file yet -- starting fresh"
+          else
+            echo "no data-cache branch yet -- first run, starting fresh"
+          fi
+
+      - name: Run prefetch
+        run: python -m whaletrading.prefetch "US Bought"
+
+      - name: Publish snapshot to data-cache branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan data-cache-publish
+          git add -f data/whaletrading.db data/snapshot_meta.json
+          git commit -m "Prefetch snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git push origin data-cache-publish:data-cache --force

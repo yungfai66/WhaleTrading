@@ -23,7 +23,7 @@ from whaletrading import signals
 from whaletrading.config import PROJECT_ROOT, load_config
 from whaletrading.data import gist_store
 from whaletrading.data import prices as prices_mod
-from whaletrading.data import store
+from whaletrading.data import snapshot_sync, store
 from whaletrading.indicators import fear_greed
 from whaletrading.pipeline import refresh_all
 
@@ -411,6 +411,12 @@ def bootstrap_data(_cfg) -> bool:
     """Populate the SQLite cache on a fresh container so visitors never see an
     empty dashboard. Runs at most once per container lifecycle (cache_resource).
 
+    Tries the GitHub Actions-published snapshot first (see
+    whaletrading.data.snapshot_sync) — a single file download — before
+    falling back to a live multi-source fetch, which is both slower and,
+    on Streamlit Cloud, exactly the "fetch on every visitor" behavior the
+    scheduled prefetch exists to avoid.
+
     Scoped to just the default watchlist, not every watchlist combined —
     with several imported lists totaling 100+ tickers, fetching everything
     on first load would make a cold start far slower than necessary. Other
@@ -423,9 +429,35 @@ def bootstrap_data(_cfg) -> bool:
     conn.close()
     if has_data:
         return False
+    if snapshot_sync.sync_if_newer(_cfg.default_watchlist, None):
+        return True
     refresh_all(_cfg, tickers=_cfg.watchlists[_cfg.default_watchlist])
     _mark_watchlist_refreshed(_cfg.default_watchlist)
     return True
+
+
+def sync_snapshot_if_newer(cfg) -> None:
+    """Fires at most once per session: checks whether the GitHub
+    Actions-published snapshot (data-cache branch) is newer than what's
+    already loaded for the active watchlist, and downloads it if so.
+
+    This is the replacement for the old auto-refresh-on-load behavior, but
+    it's cheap (one small JSON request; the full db download only follows
+    if that JSON actually shows something newer) and never touches
+    FINRA/EDGAR/Yahoo directly — it can't reproduce the slow, blocking page
+    loads the removed behavior caused. Watchlists the scheduled prefetch
+    doesn't cover simply have no entry in the snapshot's metadata, so this
+    is a no-op for them (same as before: 🔄 Refresh data is how they get
+    populated)."""
+    if st.session_state.get("_snapshot_sync_done"):
+        return
+    st.session_state["_snapshot_sync_done"] = True
+    active_name = st.session_state["active_watchlist"]
+    conn = store.connect()
+    last = store.get_meta(conn, f"last_refresh:pipeline:{active_name}")
+    conn.close()
+    if snapshot_sync.sync_if_newer(active_name, last):
+        st.cache_data.clear()
 
 
 @st.cache_data(ttl=60)
@@ -1152,8 +1184,18 @@ def overview_page(cfg):
         unsafe_allow_html=True,
     )
 
+    active_name = st.session_state["active_watchlist"]
     top = st.columns([5, 1], gap="small")
-    top[0].subheader(f"Watchlist — {st.session_state['active_watchlist']}")
+    top[0].subheader(f"Watchlist — {active_name}")
+    conn = store.connect()
+    last_refresh = store.get_meta(conn, f"last_refresh:pipeline:{active_name}")
+    conn.close()
+    # Right under the heading, not just the sidebar caption -- this is the
+    # data users are actually looking at on this page, and the auto-refresh
+    # that used to guarantee freshness on every visit is gone (see
+    # whaletrading/prefetch.py's docstring), so a stale prefetch or sync
+    # failure should be obvious here, not just discoverable in the sidebar.
+    st.caption(f"📅 Data as of: {_format_singapore(last_refresh)}")
     edit_mode = st.session_state.get("watchlist_edit_mode", False)
     if top[1].button("✓ Done" if edit_mode else "✏️ Edit", use_container_width=True):
         st.session_state["watchlist_edit_mode"] = not edit_mode
@@ -1794,6 +1836,7 @@ def main():
 
     with st.spinner("First run — fetching data (FINRA / EDGAR / prices)…"):
         bootstrap_data(cfg)
+    sync_snapshot_if_newer(cfg)
 
     def _ticker_option(t: str) -> str:
         if cfg.demo_mode:

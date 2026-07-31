@@ -1,10 +1,12 @@
 """Scheduled prefetch: refresh one watchlist ahead of anyone opening the app.
 
-The app itself no longer auto-refreshes on page load (see app.py) -- only
-this scheduled run and the "Refresh data" button in the sidebar touch the
-network. Wired to Windows Task Scheduler, weekdays ~05:00 SGT (shortly after
-the US regular session closes) -- this machine's local time is already SGT,
-so a plain 05:00 weekday trigger needs no timezone conversion.
+The app itself no longer auto-refreshes on page load (see app.py) -- only a
+scheduled run of this script and the "Refresh data" button in the sidebar
+touch the network. Wired to a GitHub Actions cron job
+(.github/workflows/prefetch.yml), weekdays ~05:00 SGT (shortly after the US
+regular session closes), which publishes the resulting data/whaletrading.db
+and data/snapshot_meta.json to the repo's `data-cache` branch --
+whaletrading.data.snapshot_sync downloads that from the Streamlit Cloud side.
 
 Run:  python -m whaletrading.prefetch                # config's default_watchlist
       python -m whaletrading.prefetch "US Bought"     # a specific watchlist
@@ -12,10 +14,11 @@ Run:  python -m whaletrading.prefetch                # config's default_watchlis
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 
-from .config import load_config
+from .config import DATA_DIR, load_config
 from .data import store
 from .pipeline import refresh_all
 
@@ -40,7 +43,17 @@ def main() -> int:
 
     conn = store.connect()
     store.mark_refreshed(conn, f"pipeline:{name}")
+    refreshed_at = store.get_meta(conn, f"last_refresh:pipeline:{name}")
     conn.close()
+
+    # Companion file for snapshot_sync.py: lets the Cloud app decide whether
+    # to download the (much larger) db without fetching it first. Keyed by
+    # watchlist name so a future run covering more than one doesn't clobber
+    # this one's entry.
+    meta_path = DATA_DIR / "snapshot_meta.json"
+    meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+    meta[name] = refreshed_at
+    meta_path.write_text(json.dumps(meta, indent=2))
 
     for ticker, notes in summary["tickers"].items():
         print(f"{ticker:6s} {' | '.join(notes)}")
