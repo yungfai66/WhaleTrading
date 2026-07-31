@@ -277,17 +277,27 @@ st.markdown(
        to this one container (Streamlit stamps a stable st-key-<key> class
        via st.container(key=...)) so it doesn't affect other tables/columns
        elsewhere in the app. font-variant-numeric keeps digits a fixed width
-       so Close/Whale/Δ20d/Retail line up column-wise instead of drifting. */
+       so Close/Whale/Δ20d/Retail line up column-wise instead of drifting.
+
+       Colors below are unconditional, not gated on
+       @media(prefers-color-scheme: dark) — that tracks the OS/browser
+       theme, not Streamlit's own in-app theme toggle, and this app always
+       runs in Streamlit's dark theme regardless of OS setting. The gated
+       version silently never applied, so the row/header highlight fell
+       back to this near-white default against the dark theme's near-white
+       text — unreadable. The hover/header-band tints use color-mix()
+       against currentColor so they self-adjust to whatever text color is
+       actually active instead of a second hardcoded guess. */
     .st-key-watchlist_table { font-variant-numeric: tabular-nums; }
     .st-key-watchlist_table div[data-testid="stHorizontalBlock"] {
-        border-bottom: 1px solid #e1e0d9;
+        border-bottom: 1px solid #33363f;
         gap: 0.3rem !important;
     }
     .st-key-watchlist_table div[data-testid="stHorizontalBlock"]:hover {
-        background: #f7f6f2;
+        background: color-mix(in srgb, currentColor 16%, transparent);
     }
     .st-key-watchlist_table div[data-testid="column"] {
-        border-right: 1px solid #e1e0d9;
+        border-right: 1px solid #33363f;
         padding: 0.05rem 0.4rem !important;
     }
     .st-key-watchlist_table div[data-testid="column"]:last-child { border-right: none; }
@@ -301,11 +311,18 @@ st.markdown(
         text-align: right;
     }
     /* Header row: tinted band so it reads as a header, not just another row. */
-    .st-key-watchlist_header_row { background: #f4f3ef; border-radius: 4px 4px 0 0; }
+    .st-key-watchlist_header_row {
+        background: color-mix(in srgb, currentColor 8%, transparent);
+        border-radius: 4px 4px 0 0;
+    }
     /* Header/data buttons: never wrap, ellipsis instead, tight padding, and
        a font size that tracks viewport width — the original bug (a full
        column-width label + sort arrow at a fixed 0.78rem font wrapped to
-       two lines and broke row alignment). */
+       two lines and broke row alignment). Background/text/border colors are
+       also overridden here: Streamlit's own secondary-button style renders
+       a fixed white pill with dark text regardless of the app's dark theme
+       — the actual source of the "header button contrast, ugly" complaint,
+       separate from (and not fixed by) the row/header-band coloring above. */
     .st-key-watchlist_table .stButton button {
         padding: 0.05rem 0.3rem !important;
         font-size: clamp(0.68rem, 0.78vw, 0.82rem) !important;
@@ -313,6 +330,14 @@ st.markdown(
         overflow: hidden;
         text-overflow: ellipsis;
         width: 100%;
+        background-color: #2c2f37 !important;
+        color: #e8e8ec !important;
+        border-color: #454850 !important;
+    }
+    .st-key-watchlist_table .stButton button:hover {
+        background-color: #383c45 !important;
+        border-color: #5a5e68 !important;
+        color: #ffffff !important;
     }
 
     /* Watchlist % bar (Whale column) — a real filled track, not the old
@@ -322,7 +347,7 @@ st.markdown(
         display: inline-block;
         width: 60px;
         height: 8px;
-        background: #e1e0d9;
+        background: #33363f;
         border-radius: 4px;
         vertical-align: middle;
         margin-right: 0.4rem;
@@ -336,20 +361,13 @@ st.markdown(
         background: #e34948;
     }
 
-    /* Dark mode: the rules above assume a light background and break under
-       Streamlit's default dark theme (#0e1117) — the header band and
-       hover-highlight colors are near-white, making their text unreadable,
-       and the stock background itself reads as harsh near-black. Override
-       with a softer dark palette; Streamlit's own sidebar background
-       (#262730) is untouched since it isn't part of the complaint. */
-    @media (prefers-color-scheme: dark) {
-        .stApp, [data-testid="stHeader"] { background: #16181d; }
-        .st-key-watchlist_table div[data-testid="stHorizontalBlock"] { border-bottom-color: #33363f; }
-        .st-key-watchlist_table div[data-testid="stHorizontalBlock"]:hover { background: #242830; }
-        .st-key-watchlist_table div[data-testid="column"] { border-right-color: #33363f; }
-        .st-key-watchlist_header_row { background: #1f222a; }
-        .wt-bar-track { background: #33363f; }
-    }
+    /* App/header background: Streamlit's default dark theme (#0e1117)
+       reads as harsh near-black. Softer dark grey instead; Streamlit's own
+       sidebar background (#262730) is untouched since it isn't part of the
+       complaint. Unconditional for the same reason as above — the OS media
+       query this used to be gated on never matched this app's actual
+       (always-dark) theme. */
+    .stApp, [data-testid="stHeader"] { background: #20232a; }
     </style>
     """,
     unsafe_allow_html=True,
