@@ -48,18 +48,24 @@ def fetch_daily(ticker: str, lookback_years: int = 5, start: str | None = None) 
     return out
 
 
-def fetch_daily_batch(tickers: list[str], lookback_years: int = 5) -> dict[str, pd.DataFrame]:
+def fetch_daily_batch(
+    tickers: list[str], lookback_years: int = 5, start: str | None = None
+) -> dict[str, pd.DataFrame]:
     """Daily OHLCV for many symbols in one yfinance call — used for the Fear &
     Greed basket (~40+ symbols) so a refresh makes one HTTP round-trip
     instead of one per symbol. Symbols that fail or come back empty are
     simply absent from the returned dict (same fail-open contract as
-    fetch_daily returning an empty frame)."""
+    fetch_daily returning an empty frame).
+
+    `start` (YYYY-MM-DD) fetches from that date forward for every symbol
+    instead of the full `lookback_years` window, same incremental-refresh
+    idea as fetch_daily (see pipeline._refresh_sentiment)."""
     if not tickers:
         return {}
     try:
         raw = yf.download(
             tickers,
-            period=f"{lookback_years}y",
+            **({"start": start} if start else {"period": f"{lookback_years}y"}),
             interval="1d",
             auto_adjust=True,
             progress=False,

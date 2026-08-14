@@ -201,21 +201,39 @@ def _refresh_sentiment(conn, cfg: Config, summary: dict) -> None:
         return
 
     try:
-        frames = prices.fetch_daily_batch(list(fear_greed.REQUIRED_SYMBOLS), cfg.price_lookback_years)
+        symbols = list(fear_greed.REQUIRED_SYMBOLS)
+        cached_latest = [store.latest_price_date(conn, s) for s in symbols]
+        start = None
+        if all(cached_latest):
+            # Incremental, same idea as _refresh_prices: once every required
+            # symbol already has cached history, only pull the trailing
+            # window since the earliest of their last-cached dates -- one
+            # shared start, since fetch_daily_batch is a single batched call
+            # -- instead of the full lookback_years for all ~46 symbols.
+            start = (
+                pd.Timestamp(min(cached_latest)) - pd.Timedelta(days=PRICE_REFETCH_OVERLAP_DAYS)
+            ).strftime("%Y-%m-%d")
+        fetched = prices.fetch_daily_batch(symbols, cfg.price_lookback_years, start=start)
         # Cache fetched symbols in the same `prices` table the watchlist
         # uses — free incremental caching, no new input schema, and a
         # symbol that's both in the basket and the user's watchlist (e.g.
         # AAPL) just gets a fresher row rather than a conflicting one.
-        for symbol, df in frames.items():
+        for symbol, df in fetched.items():
             rows = df.reset_index()
             rows["ticker"] = symbol
             rows["date"] = rows["date"].dt.strftime("%Y-%m-%d")
             store.upsert_df(conn, "prices", rows[["ticker", "date", "open", "high", "low", "close", "volume"]])
 
+        # fear_greed.compute needs each symbol's full rolling history (up to
+        # 252 days), not just the incremental slice just fetched -- reload
+        # the merged cache (upsert just topped it up) for every symbol that
+        # has one, same reasoning as _refresh_prices.
+        frames = {s: df for s in symbols if not (df := store.load_prices(conn, s)).empty}
+
         if len(frames) < 2:  # need at least momentum + volatility to say anything
             summary["sources_failed"] = summary.get("sources_failed", []) + ["fear_greed"]
             log.warning(
-                "fear & greed: too few symbols fetched (%d/%d)", len(frames), len(fear_greed.REQUIRED_SYMBOLS)
+                "fear & greed: too few symbols with cached data (%d/%d)", len(frames), len(symbols)
             )
             return
 
