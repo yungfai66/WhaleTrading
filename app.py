@@ -451,8 +451,9 @@ def bootstrap_data(_cfg) -> bool:
         return False
     if snapshot_sync.sync_if_newer(_cfg.default_watchlist, None):
         return True
-    refresh_all(_cfg, tickers=_cfg.watchlists[_cfg.default_watchlist])
-    _mark_watchlist_refreshed(_cfg.default_watchlist)
+    summary = refresh_all(_cfg, tickers=_cfg.watchlists[_cfg.default_watchlist])
+    if "prices" not in summary.get("sources_failed", []):
+        _mark_watchlist_refreshed(_cfg.default_watchlist)
     return True
 
 
@@ -1241,7 +1242,11 @@ def overview_page(cfg):
     df = load_overview(tuple(working))
     ok = df[df["Status"] == "ok"].copy()
     ok["_pinned"] = ok["Ticker"].isin(pinned)
-    ok["_has_signal"] = ok["_signal_detail"].astype(bool)
+    # "_signal_detail" only exists on df when at least one row has
+    # Status == "ok" (see load_overview) — before any data has been
+    # synced, every ticker is "no data — run refresh" and the column
+    # is absent entirely, so guard rather than index into it.
+    ok["_has_signal"] = ok["_signal_detail"].astype(bool) if not ok.empty else False
     missing = df[df["Status"] != "ok"]
     if not ok.empty:
         sort_state = st.session_state.get("ov_sort")
@@ -1934,8 +1939,15 @@ def main():
         ):
             with st.spinner(f"Fetching FINRA / EDGAR / prices for “{active_name}”…"):
                 summary = refresh_all(cfg, tickers=get_working_watchlist(cfg))
-                _mark_watchlist_refreshed(active_name)
             failed = summary.get("sources_failed", [])
+            if "prices" in failed:
+                # Don't stamp "last refresh" on a total price-fetch failure --
+                # that would hide the failure behind a fresh-looking timestamp
+                # and block sync_snapshot_if_newer from ever recovering with a
+                # real published snapshot later.
+                st.error("Refresh failed: could not fetch prices for any ticker. Nothing was updated.")
+            else:
+                _mark_watchlist_refreshed(active_name)
             if failed:
                 st.warning("Unavailable sources: " + ", ".join(failed))
             st.cache_data.clear()

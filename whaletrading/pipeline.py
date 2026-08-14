@@ -78,6 +78,13 @@ def _refresh_prices(conn, cfg: Config, summary: dict, tickers: list[str]) -> dic
             conn, "prices", rows[["ticker", "date", "open", "high", "low", "close", "volume"]]
         )
         summary["tickers"].setdefault(ticker, []).append(f"prices: {len(df)} days")
+    if tickers and not frames:
+        # Every ticker failed (and none had a cache to fall back on) -- surface
+        # this as a real failure rather than silently marking prices/metrics
+        # refreshed with nothing written, which would poison the per-watchlist
+        # last-refresh timestamp and block snapshot_sync from ever pulling a
+        # real snapshot down again (see app.py's sync_snapshot_if_newer).
+        summary["sources_failed"] = summary.get("sources_failed", []) + ["prices"]
     store.mark_refreshed(conn, "prices")
     return frames
 
