@@ -11,6 +11,7 @@ timing signal.
 from __future__ import annotations
 
 import logging
+from datetime import date, timedelta
 
 import pandas as pd
 import requests
@@ -21,9 +22,19 @@ API_URL = "https://api.finra.org/data/group/otcMarket/name/weeklySummary"
 PAGE_LIMIT = 5000
 
 
-def fetch_weekly(tickers: list[str], weeks: int = 26) -> pd.DataFrame:
-    """Return weekly ATS share volume per ticker (columns match ats_weekly table)."""
+def fetch_weekly(tickers: list[str], weeks: int = 26, start: date | None = None) -> pd.DataFrame:
+    """Return weekly ATS share volume per ticker (columns match ats_weekly table).
+
+    The request is always bounded server-side via FINRA's dateRangeFilters —
+    `start` if given, else the trailing `weeks` weeks — never unfiltered.
+    Without any date filter at all, one symbol alone returns its *entire*
+    history (4+ years / ~130KB), and a 50-symbol batch can exceed the API's
+    5000-row page limit and silently drop rows for symbols later in the
+    batch; bounding the window avoids both the waste and that truncation.
+    `start` narrows further to just the trailing gap since the last cached
+    week — used for incremental refreshes (see pipeline._refresh_ats)."""
     wanted = sorted({t.upper() for t in tickers})
+    effective_start = start or (date.today() - timedelta(weeks=weeks))
     frames = []
     for batch_start in range(0, len(wanted), 50):
         batch = wanted[batch_start : batch_start + 50]
@@ -38,6 +49,13 @@ def fetch_weekly(tickers: list[str], weeks: int = 26) -> pd.DataFrame:
             ],
             "domainFilters": [
                 {"fieldName": "issueSymbolIdentifier", "values": batch}
+            ],
+            "dateRangeFilters": [
+                {
+                    "fieldName": "weekStartDate",
+                    "startDate": effective_start.isoformat(),
+                    "endDate": date.today().isoformat(),
+                }
             ],
         }
         try:
@@ -82,8 +100,7 @@ def fetch_weekly(tickers: list[str], weeks: int = 26) -> pd.DataFrame:
         out.groupby(["ticker", "week_start"], as_index=False)
         .agg(total_shares=("total_shares", "sum"), total_trades=("total_trades", "sum"))
     )
-    cutoff = pd.Timestamp.today() - pd.Timedelta(weeks=weeks)
-    return out[pd.to_datetime(out["week_start"]) >= cutoff]
+    return out[pd.to_datetime(out["week_start"]) >= pd.Timestamp(effective_start)]
 
 
 def _first_col(df: pd.DataFrame, candidates: list[str]) -> str | None:

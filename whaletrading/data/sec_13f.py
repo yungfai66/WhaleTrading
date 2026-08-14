@@ -45,34 +45,51 @@ def fetch_13f_holdings(
     aliases: dict[str, list[str]],
     user_agent: str,
     filings_per_manager: int = 2,
-) -> pd.DataFrame:
-    """Return rows matching the inst_13f table for the last N filings per manager.
+    known_accessions: dict[int, set[str]] | None = None,
+) -> tuple[pd.DataFrame, dict[int, list[str]], int]:
+    """Return (rows matching the inst_13f table, newly-fetched accessions per
+    manager CIK, count of managers successfully queried).
 
     `aliases` maps TICKER -> list of issuer-name substrings (case-insensitive).
     Managers or filings that fail are skipped with a warning.
+
+    A 13F-HR filing is immutable once filed, so `known_accessions` (CIK ->
+    accession numbers already fetched in a prior run) lets a refresh skip
+    re-downloading and re-parsing a filing's info-table XML -- which for a
+    manager like BlackRock or Vanguard can be several MB -- a second time.
+    Only genuinely new filings get fetched; the second return value is every
+    accession actually fetched this run, for the caller to remember.
     """
     matchers = {
         ticker: [a.upper() for a in names] for ticker, names in aliases.items() if names
     }
     if not matchers:
         log.warning("no issuer aliases configured — skipping 13F component")
-        return pd.DataFrame()
+        return pd.DataFrame(), {}, 0
 
+    known_accessions = known_accessions or {}
     client = EdgarClient(user_agent)
     rows: list[dict] = []
+    fetched: dict[int, list[str]] = {}
+    ok_managers = 0
     for mgr in managers:
         cik, name = int(mgr["cik"]), str(mgr.get("name", mgr["cik"]))
+        already = known_accessions.get(cik, set())
         try:
             filings = _recent_13f_filings(client, cik)[:filings_per_manager]
         except Exception as exc:
             log.warning("EDGAR submissions failed for %s (CIK %s): %s", name, cik, exc)
             continue
+        ok_managers += 1
         for accession, report_period in filings:
+            if accession in already:
+                continue
             try:
                 holdings = _fetch_info_table(client, cik, accession)
             except Exception as exc:
                 log.warning("13F info table failed for %s %s: %s", name, accession, exc)
                 continue
+            fetched.setdefault(cik, []).append(accession)
             for ticker, patterns in matchers.items():
                 total_shares, total_value = 0, 0
                 for h in holdings:
@@ -91,7 +108,7 @@ def fetch_13f_holdings(
                             "value_usd": total_value,
                         }
                     )
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows), fetched, ok_managers
 
 
 def _recent_13f_filings(client: EdgarClient, cik: int) -> list[tuple[str, str]]:

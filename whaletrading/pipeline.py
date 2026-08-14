@@ -146,17 +146,43 @@ def _refresh_short_volume(conn, cfg: Config, summary: dict, price_frames, ticker
     store.mark_refreshed(conn, "short_volume")
 
 
+ATS_REFETCH_OVERLAP_WEEKS = 4  # matches finra_ats's documented ~2-4 week publication delay
+
+
 def _refresh_ats(conn, cfg: Config, summary: dict, price_frames, tickers: list[str]) -> None:
     if cfg.demo_mode:
         for ticker, pf in price_frames.items():
             store.upsert_df(conn, "ats_weekly", demo.demo_ats_weekly(ticker, pf))
         store.mark_refreshed(conn, "ats_weekly")
         return
-    df = finra_ats.fetch_weekly(tickers)
-    if df.empty:
+    # Incremental: once every ticker being refreshed has been through at
+    # least one prior _refresh_ats call ("covered", tracked in `meta` since
+    # a thinly-traded ticker can legitimately have zero ATS-reported weeks
+    # forever -- an exact-same-cached-weeks check like _refresh_short_volume's
+    # would never match and would block incrementality for the whole batch),
+    # request only the trailing gap since the earliest last-cached week
+    # across them, instead of the full `weeks` window every refresh.
+    covered = set(store.get_meta(conn, "ats_covered_tickers", []) or [])
+    start = None
+    had_cache = False
+    if tickers and set(tickers) <= covered:
+        maxes = [
+            row[0]
+            for t in tickers
+            if (row := conn.execute("SELECT MAX(week_start) FROM ats_weekly WHERE ticker=?", (t,)).fetchone())
+            and row[0]
+        ]
+        had_cache = bool(maxes)
+        if maxes:
+            start = date.fromisoformat(min(maxes)) - timedelta(weeks=ATS_REFETCH_OVERLAP_WEEKS)
+    df = finra_ats.fetch_weekly(tickers, start=start)
+    if tickers:
+        store.set_meta(conn, "ats_covered_tickers", sorted(covered | set(tickers)))
+    if df.empty and not had_cache:
         summary["sources_failed"] = summary.get("sources_failed", []) + ["finra_ats"]
         return
-    store.upsert_df(conn, "ats_weekly", df)
+    if not df.empty:
+        store.upsert_df(conn, "ats_weekly", df)
     store.mark_refreshed(conn, "ats_weekly")
 
 
@@ -171,13 +197,25 @@ def _refresh_13f(conn, cfg: Config, summary: dict, tickers: list[str]) -> None:
     # Matched by config/watchlist.yaml's issuer_aliases, not by `tickers` —
     # a ticker added via the UI without a corresponding alias entry simply
     # won't get 13F data, same as any ticker missing an alias today.
-    df = sec_13f.fetch_13f_holdings(
-        cfg.managers_13f, cfg.issuer_aliases, cfg.sec_user_agent
+    #
+    # Incremental: a 13F-HR filing never changes once filed, so skip
+    # re-downloading/re-parsing a filing's info-table XML (can be several MB
+    # for a manager like BlackRock or Vanguard) once we already have it —
+    # known_accessions is persisted per manager CIK in `meta`.
+    known = {
+        int(mgr["cik"]): set(store.get_meta(conn, f"13f_accessions:{int(mgr['cik'])}", []) or [])
+        for mgr in cfg.managers_13f
+    }
+    df, fetched, ok_managers = sec_13f.fetch_13f_holdings(
+        cfg.managers_13f, cfg.issuer_aliases, cfg.sec_user_agent, known_accessions=known
     )
-    if df.empty:
+    if ok_managers == 0:
         summary["sources_failed"] = summary.get("sources_failed", []) + ["sec_13f"]
         return
-    store.upsert_df(conn, "inst_13f", df)
+    for cik, accessions in fetched.items():
+        store.set_meta(conn, f"13f_accessions:{cik}", sorted(known.get(cik, set()) | set(accessions)))
+    if not df.empty:
+        store.upsert_df(conn, "inst_13f", df)
     store.mark_refreshed(conn, "inst_13f")
 
 
