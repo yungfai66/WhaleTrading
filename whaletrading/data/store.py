@@ -87,6 +87,11 @@ def read_df(conn: sqlite3.Connection, sql: str, params: tuple = ()) -> pd.DataFr
     return pd.read_sql_query(sql, conn, params=params)
 
 
+def latest_price_date(conn: sqlite3.Connection, ticker: str) -> str | None:
+    row = conn.execute("SELECT MAX(date) FROM prices WHERE ticker=?", (ticker,)).fetchone()
+    return row[0] if row and row[0] else None
+
+
 def load_prices(conn: sqlite3.Connection, ticker: str) -> pd.DataFrame:
     df = read_df(
         conn,

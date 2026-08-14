@@ -24,12 +24,16 @@ def _normalize(df: pd.DataFrame) -> pd.DataFrame:
     return df.dropna(subset=["close"])
 
 
-def fetch_daily(ticker: str, lookback_years: int = 5) -> pd.DataFrame:
-    """Return daily OHLCV indexed by date, or an empty frame on failure."""
+def fetch_daily(ticker: str, lookback_years: int = 5, start: str | None = None) -> pd.DataFrame:
+    """Return daily OHLCV indexed by date, or an empty frame on failure.
+
+    `start` (YYYY-MM-DD) fetches from that date forward instead of the full
+    `lookback_years` window -- used for incremental refreshes where most of
+    the history is already cached (see pipeline._refresh_prices)."""
     try:
         df = yf.download(
             ticker,
-            period=f"{lookback_years}y",
+            **({"start": start} if start else {"period": f"{lookback_years}y"}),
             interval="1d",
             auto_adjust=True,
             progress=False,

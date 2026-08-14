@@ -54,14 +54,28 @@ def refresh_all(
     return summary
 
 
+PRICE_REFETCH_OVERLAP_DAYS = 10  # trailing window re-pulled on an incremental refresh, to catch late dividend/split adjustments to recent bars
+
+
 def _refresh_prices(conn, cfg: Config, summary: dict, tickers: list[str]) -> dict[str, pd.DataFrame]:
     frames: dict[str, pd.DataFrame] = {}
     for ticker in tickers:
-        df = (
-            demo.demo_prices(ticker, cfg.price_lookback_years)
-            if cfg.demo_mode
-            else prices.fetch_daily(ticker, cfg.price_lookback_years)
-        )
+        if cfg.demo_mode:
+            df = demo.demo_prices(ticker, cfg.price_lookback_years)
+            incremental = False
+        else:
+            latest = store.latest_price_date(conn, ticker)
+            start = (
+                (pd.Timestamp(latest) - pd.Timedelta(days=PRICE_REFETCH_OVERLAP_DAYS)).strftime("%Y-%m-%d")
+                if latest
+                else None
+            )
+            # Incremental: once a ticker has any cached history, only pull the
+            # trailing window since the last cached bar instead of the full
+            # lookback_years every refresh -- upsert dedupes on (ticker, date),
+            # so this just tops up what's already stored.
+            df = prices.fetch_daily(ticker, cfg.price_lookback_years, start=start)
+            incremental = start is not None
         if df.empty:
             summary["tickers"].setdefault(ticker, []).append("prices: FAILED")
             # fall back to whatever is already cached
@@ -70,14 +84,17 @@ def _refresh_prices(conn, cfg: Config, summary: dict, tickers: list[str]) -> dic
                 frames[ticker] = cached
                 summary["tickers"][ticker].append("prices: using cache")
             continue
-        frames[ticker] = df
         rows = df.reset_index()
         rows["ticker"] = ticker
         rows["date"] = rows["date"].dt.strftime("%Y-%m-%d")
         store.upsert_df(
             conn, "prices", rows[["ticker", "date", "open", "high", "low", "close", "volume"]]
         )
-        summary["tickers"].setdefault(ticker, []).append(f"prices: {len(df)} days")
+        # Downstream metrics need the full history (rolling baseline windows),
+        # not just the incremental slice just fetched -- reload the merged
+        # result from the cache, which upsert just topped up.
+        frames[ticker] = store.load_prices(conn, ticker) if incremental else df
+        summary["tickers"].setdefault(ticker, []).append(f"prices: {len(df)} days fetched")
     if tickers and not frames:
         # Every ticker failed (and none had a cache to fall back on) -- surface
         # this as a real failure rather than silently marking prices/metrics
