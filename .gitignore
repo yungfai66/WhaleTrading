@@ -15,6 +15,7 @@ venv/
 .DS_Store
 .idea/
 .vscode/
+.claude/
 
 # Streamlit
 .streamlit/secrets.toml
